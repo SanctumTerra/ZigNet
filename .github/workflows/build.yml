@@ -23,9 +23,6 @@ jobs:
     - name: Run tests
       run: zig build test
       
-    - name: Build all targets
-      run: zig build build-all
-      
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
