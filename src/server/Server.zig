@@ -137,10 +137,14 @@ pub const Server = struct {
                 const string = self.options.advertisement.toString(self.options.allocator);
                 defer self.options.allocator.free(string);
                 var pong = Proto.UnconnectedPong.init(
+                    self.options.allocator,
                     std.time.milliTimestamp(),
                     self.options.advertisement.guid,
                     string,
-                );
+                ) catch |err| {
+                    Logger.ERROR("Failed to create unconnected pong: {s}", .{@errorName(err)});
+                    return;
+                };
                 const pong_data = pong.serialize(self.options.allocator);
                 defer self.options.allocator.free(pong_data);
                 self.send(pong_data, from_addr);

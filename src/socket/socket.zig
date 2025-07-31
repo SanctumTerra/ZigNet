@@ -41,7 +41,7 @@ const Config = struct {
     const IDLE_SLEEP_NS = 1_000_000;
     const MAX_IDLE_SLEEP_NS = 5_000_000;
     const IDLE_THRESHOLD = 10;
-    const DEEP_IDLE_THRESHOLD = 100; 
+    const DEEP_IDLE_THRESHOLD = 100;
     const MAX_CONSECUTIVE_ERRORS = 15;
     const SOCKET_RECV_TIMEOUT_MS = 10;
 };
@@ -272,7 +272,7 @@ pub const Socket = struct {
 
         // Make sure non-blocking is set
         const flags = posix.fcntl(sock, posix.F.GETFL, 0) catch return;
-        _ = posix.fcntl(sock, posix.F.SETFL, flags | posix.O.NONBLOCK) catch return;
+        _ = posix.fcntl(sock, posix.F.SETFL, flags | posix.SOCK.NONBLOCK) catch return;
     }
 
     fn initWinsock(self: *Self) SocketError!void {
