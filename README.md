@@ -15,15 +15,17 @@ A high-performance RakNet implementation written in Zig, providing reliable UDP 
 
 ### Installation
 
-Add ZigNet to your `build.zig.zon`:
+Add ZigNet to your project:
+
+```bash
+zig fetch --save git+https://github.com/SanctumTerra/ZigNet
+```
+
+Then add it to your `build.zig`:
 
 ```zig
-.dependencies = .{
-    .ZigNet = .{
-        .url = "https://github.com/your-repo/ZigNet/archive/main.tar.gz",
-        .hash = "...", // Add the hash here
-    },
-}
+const zignet_dep = b.dependency("ZigNet", .{});
+exe.root_module.addImport("ZigNet", zignet_dep.module("ZigNet"));
 ```
 
 ### Basic Server Example
