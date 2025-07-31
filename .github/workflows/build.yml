@@ -18,7 +18,7 @@ jobs:
     - name: Setup Zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: master
+        version: 0.15.0-dev.920+b461d07a5
         
     - name: Run tests
       run: zig build test
