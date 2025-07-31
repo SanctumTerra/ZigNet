@@ -1,5 +1,6 @@
 const std = @import("std");
 
+// Targets are pretty much just to know if socket is right would pretty much only run in a workflow.
 const targets = [_]std.Target.Query{
     .{ .cpu_arch = .x86_64, .os_tag = .windows },
     .{ .cpu_arch = .x86_64, .os_tag = .linux },

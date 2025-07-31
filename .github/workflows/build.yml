@@ -1,0 +1,34 @@
+name: Build All Targets
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: master
+        
+    - name: Run tests
+      run: zig build test
+      
+    - name: Build all targets
+      run: zig build build-all
+      
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: raknet-binaries
+        path: zig-out/bin/
+        retention-days: 30

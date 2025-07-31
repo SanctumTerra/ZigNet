@@ -1,7 +1,7 @@
 .{
-    .name = .Raknet,
+    .name = .ZigNet,
     .version = "0.0.0",
-    .fingerprint = 0xb55aea4d7450f240, // Changing this has security and trust implications.
+    .fingerprint = 0x1be2dab92242d60b, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.0-dev.920+b461d07a5",
     .dependencies = .{
         .BinaryStream = .{
