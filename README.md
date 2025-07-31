@@ -25,7 +25,7 @@ Then add it to your `build.zig`:
 
 ```zig
 const zignet_dep = b.dependency("ZigNet", .{});
-exe.root_module.addImport("ZigNet", zignet_dep.module("ZigNet"));
+exe.root_module.addImport("ZigNet", zignet_dep.module("Raknet"));
 ```
 
 ### Basic Server Example
