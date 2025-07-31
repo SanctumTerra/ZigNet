@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.0-dev.920+b461d07a5",
     .dependencies = .{
         .BinaryStream = .{
-            .url = "git+https://github.com/SanctumTerra/BinaryStream#825e7cbe874cc4e49e9a58473b45a64d8c07171c",
-            .hash = "BinaryStream-0.0.0-gn8mmp8mAQCIsSvYrPFxmQr9-D29hHC8t7959bD6DvGb",
+            .url = "git+https://github.com/SanctumTerra/BinaryStream#dd792a5bc4d68787a7e0e09f5b83a397c0780974",
+            .hash = "BinaryStream-0.0.0-gn8mmp8mAQBcrTiSkmuHGmgcxX_RzcHjD-CGoPVdizSN",
         },
     },
     .paths = .{
