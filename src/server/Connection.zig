@@ -17,6 +17,7 @@ pub const Connection = struct {
     server: *Server,
     address: std.net.Address,
     mtu_size: u16,
+    guid: i64,
     connected: bool,
     active: bool,
     comm_data: CommData,
@@ -24,7 +25,7 @@ pub const Connection = struct {
     game_packet_callback: ?GamePacketCallback,
     game_packet_context: ?*anyopaque,
 
-    pub fn init(server: *Server, address: std.net.Address, mtu_size: u16) !Self {
+    pub fn init(server: *Server, address: std.net.Address, mtu_size: u16, guid: i64) !Self {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(server.options.allocator);
         var i: u32 = 0;
         while (i < MAX_ACTIVE_FRAGMENTATIONS) : (i += 1) {
@@ -34,6 +35,7 @@ pub const Connection = struct {
             .server = server,
             .address = address,
             .mtu_size = mtu_size,
+            .guid = guid,
             .connected = false,
             .active = true,
             .comm_data = .{

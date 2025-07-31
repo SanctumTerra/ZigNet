@@ -181,7 +181,7 @@ pub const Server = struct {
                     Logger.INFO("Connection already exists", .{});
                 } else {
                     Logger.INFO("New connection", .{});
-                    const connection = Connection.init(self, from_addr, request.mtu_size) catch |err| {
+                    const connection = Connection.init(self, from_addr, request.mtu_size, request.guid) catch |err| {
                         Logger.ERROR("Failed to create connection: {s}", .{@errorName(err)});
                         return;
                     };
