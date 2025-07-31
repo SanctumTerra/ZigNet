@@ -1,0 +1,62 @@
+const Packets = @import("../Packets.zig").Packets;
+
+pub const UnconnectedPing = struct {
+    timestamp: i64,
+    guid: i64,
+
+    pub fn init(timestamp: i64, guid: i64) UnconnectedPing {
+        return .{ .timestamp = timestamp, .guid = guid };
+    }
+
+    pub fn deinit(self: *UnconnectedPing) void {
+        self.timestamp = 0;
+        self.guid = 0;
+    }
+
+    pub fn serialize(self: *UnconnectedPing, allocator: std.mem.Allocator) []const u8 {
+        const buffer = &[_]u8{};
+        var stream = BinaryStream.init(allocator, buffer, 0);
+        defer stream.deinit();
+        VarInt.write(&stream, Packets.UnconnectedPing);
+        stream.writeInt64(self.timestamp, .Big);
+        Magic.write(&stream);
+        stream.writeInt64(self.guid, .Big);
+        const payload = stream.getBufferOwned(allocator) catch {
+            Logger.ERROR("Failed to serialize unconnected pong", .{});
+            return "";
+        }; // defer CAllocator.get().free(payload);
+        return payload;
+    }
+
+    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) UnconnectedPing {
+        var stream = BinaryStream.init(allocator, data, 0);
+        defer stream.deinit();
+        _ = VarInt.read(&stream);
+        const timestamp = stream.readInt64(.Big);
+        Magic.read(&stream);
+        const guid = stream.readInt64(.Big);
+        return .{ .timestamp = timestamp, .guid = guid };
+    }
+};
+
+const std = @import("std");
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const VarInt = @import("BinaryStream").VarInt;
+const Magic = @import("../Magic.zig").Magic;
+const Logger = @import("../../misc/Logger.zig").Logger;
+
+test "Unconnected Ping" {
+    const allocator = std.heap.page_allocator;
+    var ping = UnconnectedPing.init(123456789, 987654321);
+    defer ping.deinit();
+
+    const serialized = ping.serialize(allocator);
+    defer allocator.free(serialized);
+
+    var deserialized = UnconnectedPing.deserialize(serialized, allocator);
+    defer deserialized.deinit();
+
+    try std.testing.expectEqual(ping.timestamp, deserialized.timestamp);
+    try std.testing.expectEqual(ping.guid, deserialized.guid);
+    Logger.DEBUG("UnconnectedPing pass.", .{});
+}
