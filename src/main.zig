@@ -4,6 +4,7 @@ const Server = @import("Raknet").Server;
 const Logger = @import("Raknet").Logger;
 const Connection = @import("Raknet").Connection;
 
+/// This is a test file or an example of  usage
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
