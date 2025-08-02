@@ -145,6 +145,7 @@ pub const Server = struct {
                     Logger.ERROR("Failed to create unconnected pong: {s}", .{@errorName(err)});
                     return;
                 };
+                defer pong.deinit(allocator);
                 const pong_data = pong.serialize(self.options.allocator);
                 defer self.options.allocator.free(pong_data);
                 self.send(pong_data, from_addr);
