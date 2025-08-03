@@ -646,7 +646,6 @@ pub const Connection = struct {
         for (frames, 0..) |frame, i| {
             const payload = if (frame.payload.len > 0)
                 allocator.dupe(u8, frame.payload) catch {
-                    // Cleanup partial backup
                     for (0..i) |j| {
                         backup[j].deinit(allocator);
                     }
@@ -728,7 +727,6 @@ pub const Connection = struct {
         self.game_packet_context = context;
     }
 
-    /// Get connection info
     pub fn getAddress(self: *const Connection) std.net.Address {
         return self.address;
     }
@@ -780,7 +778,6 @@ pub const CommData = struct {
         }
         self.input_ordering_queue.deinit();
 
-        // Properly cleanup output_backup
         var backup_iter = self.output_backup.iterator();
         while (backup_iter.next()) |entry| {
             const frames = entry.value_ptr.*;
@@ -791,7 +788,6 @@ pub const CommData = struct {
         }
         self.output_backup.deinit();
 
-        // Properly cleanup fragments_queue
         var fragments_iter = self.fragments_queue.iterator();
         while (fragments_iter.next()) |outer_entry| {
             var inner_fragments_iter = outer_entry.value_ptr.iterator();
