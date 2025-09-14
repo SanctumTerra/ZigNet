@@ -21,32 +21,32 @@ pub const Ack = struct {
     }
 
     /// DEALLOCATE THE RETURNED STRUCT AFTER USE
-    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) Ack {
+    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !Ack {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
 
-        _ = stream.readUint8(); // Read packet ID (UInt8, not VarInt)
-        const record_count = stream.readUint16(.Big);
+        _ = try stream.readUint8(); // Read packet ID (UInt8, not VarInt)
+        const record_count = try stream.readUint16(.Big);
 
-        var sequences = std.ArrayList(u32).init(allocator);
-        defer sequences.deinit();
+        var sequences = std.ArrayList(u32).initBuffer(&[_]u32{});
+        defer sequences.deinit(allocator);
 
         var index: usize = 0;
         while (index < record_count) : (index += 1) {
-            const range = stream.readBool(); // False for range, True for no range
+            const range = try stream.readBool(); // False for range, True for no range
             if (range) {
-                const value = stream.readUint24(.Little);
-                sequences.append(value) catch |err| {
-                    Logger.ERROR("Failed to append sequence value: {}", .{err});
+                const value = try stream.readUint24(.Little);
+                sequences.append(allocator, value) catch |err| {
+                    Logger.ERROR("Failed to append sequence value: {any}", .{err});
                     continue;
                 };
             } else {
-                const start = stream.readUint24(.Little);
-                const end = stream.readUint24(.Little);
+                const start = try stream.readUint24(.Little);
+                const end = try stream.readUint24(.Little);
                 var seq_index = start;
                 while (seq_index <= end) : (seq_index += 1) {
-                    sequences.append(seq_index) catch |err| {
-                        Logger.ERROR("Failed to append sequence range value: {}", .{err});
+                    sequences.append(allocator, seq_index) catch |err| {
+                        Logger.ERROR("Failed to append sequence range value: {any}", .{err});
                         break;
                     };
                 }
@@ -54,7 +54,7 @@ pub const Ack = struct {
         }
 
         return Ack.init(sequences.items, allocator) catch |err| {
-            Logger.ERROR("Failed to initialize Ack: {}", .{err});
+            Logger.ERROR("Failed to initialize Ack: {any}", .{err});
             return Ack{
                 .sequences = &[_]u32{},
                 .allocator = allocator,
@@ -62,25 +62,25 @@ pub const Ack = struct {
         };
     }
 
-    pub fn serialize(self: *const Ack, allocator: std.mem.Allocator) []const u8 {
-        var main_buffer = std.ArrayList(u8).init(allocator);
-        defer main_buffer.deinit();
+    pub fn serialize(self: *const Ack, allocator: std.mem.Allocator) ![]const u8 {
+        var main_buffer = std.ArrayList(u8).initBuffer(&[_]u8{});
+        defer main_buffer.deinit(allocator);
 
         // Write packet ID
-        main_buffer.append(Packets.Ack) catch return &[_]u8{};
+        main_buffer.append(allocator, Packets.Ack) catch return &[_]u8{};
 
-        var stream = std.ArrayList(u8).init(allocator);
-        defer stream.deinit();
+        var stream = std.ArrayList(u8).initBuffer(&[_]u8{});
+        defer stream.deinit(allocator);
 
         const count = self.sequences.len;
         var records: u16 = 0;
 
         if (count > 0) {
             // Sort sequences first to match expected behavior
-            var sorted_sequences = std.ArrayList(u32).init(allocator);
-            defer sorted_sequences.deinit();
+            var sorted_sequences = std.ArrayList(u32).initBuffer(&[_]u32{});
+            defer sorted_sequences.deinit(allocator);
 
-            sorted_sequences.appendSlice(self.sequences) catch return &[_]u8{};
+            sorted_sequences.appendSlice(allocator, self.sequences) catch return &[_]u8{};
             std.mem.sort(u32, sorted_sequences.items, {}, comptime std.sort.asc(u32));
 
             var cursor: usize = 0;
@@ -98,23 +98,23 @@ pub const Ack = struct {
                     last = current;
                 } else if (diff > 1) {
                     if (start == last) {
-                        stream.append(1) catch return &[_]u8{}; // true - single
+                        stream.append(allocator, 1) catch return &[_]u8{}; // true - single
                         // Write as little endian u24
-                        stream.append(@as(u8, @truncate(start))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(start >> 8))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(start >> 16))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start >> 8))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start >> 16))) catch return &[_]u8{};
                         start = current;
                         last = current;
                     } else {
-                        stream.append(0) catch return &[_]u8{}; // false - range
+                        stream.append(allocator, 0) catch return &[_]u8{}; // false - range
                         // Write start as little endian u24
-                        stream.append(@as(u8, @truncate(start))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(start >> 8))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(start >> 16))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start >> 8))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(start >> 16))) catch return &[_]u8{};
                         // Write end as little endian u24
-                        stream.append(@as(u8, @truncate(last))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(last >> 8))) catch return &[_]u8{};
-                        stream.append(@as(u8, @truncate(last >> 16))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(last))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(last >> 8))) catch return &[_]u8{};
+                        stream.append(allocator, @as(u8, @truncate(last >> 16))) catch return &[_]u8{};
                         start = current;
                         last = current;
                     }
@@ -124,37 +124,37 @@ pub const Ack = struct {
 
             // Last iteration
             if (start == last) {
-                stream.append(1) catch return &[_]u8{}; // true - single
+                stream.append(allocator, 1) catch return &[_]u8{}; // true - single
                 // Write as little endian u24
-                stream.append(@as(u8, @truncate(start))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(start >> 8))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(start >> 16))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start >> 8))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start >> 16))) catch return &[_]u8{};
             } else {
-                stream.append(0) catch return &[_]u8{}; // false - range
+                stream.append(allocator, 0) catch return &[_]u8{}; // false - range
                 // Write start as little endian u24
-                stream.append(@as(u8, @truncate(start))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(start >> 8))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(start >> 16))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start >> 8))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(start >> 16))) catch return &[_]u8{};
                 // Write end as little endian u24
-                stream.append(@as(u8, @truncate(last))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(last >> 8))) catch return &[_]u8{};
-                stream.append(@as(u8, @truncate(last >> 16))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(last))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(last >> 8))) catch return &[_]u8{};
+                stream.append(allocator, @as(u8, @truncate(last >> 16))) catch return &[_]u8{};
             }
             records += 1;
 
             // Write record count in big endian (UShort)
-            main_buffer.append(@as(u8, @truncate(records >> 8))) catch return &[_]u8{};
-            main_buffer.append(@as(u8, @truncate(records))) catch return &[_]u8{};
+            main_buffer.append(allocator, @as(u8, @truncate(records >> 8))) catch return &[_]u8{};
+            main_buffer.append(allocator, @as(u8, @truncate(records))) catch return &[_]u8{};
 
             // Write stream buffer
-            main_buffer.appendSlice(stream.items) catch return &[_]u8{};
+            main_buffer.appendSlice(allocator, stream.items) catch return &[_]u8{};
         } else {
             // Write 0 records
-            main_buffer.append(0) catch return &[_]u8{};
-            main_buffer.append(0) catch return &[_]u8{};
+            main_buffer.append(allocator, 0) catch return &[_]u8{};
+            main_buffer.append(allocator, 0) catch return &[_]u8{};
         }
 
-        return main_buffer.toOwnedSlice() catch &[_]u8{};
+        return main_buffer.toOwnedSlice(allocator) catch &[_]u8{};
     }
 };
 
@@ -168,7 +168,7 @@ test "Ack" {
     const serialized = ack.serialize(allocator);
     defer allocator.free(serialized);
 
-    var deserialized = Ack.deserialize(serialized, allocator);
+    var deserialized = try Ack.deserialize(serialized, allocator);
     defer deserialized.deinit();
 
     try std.testing.expectEqual(ack.sequences.len, deserialized.sequences.len);
