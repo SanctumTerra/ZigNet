@@ -14,7 +14,7 @@ pub fn main() !void {
     server.setConnectCallback(onConnect, null);
     server.setDisconnectCallback(onDisconnect, null);
     try server.start();
-    std.time.sleep(std.time.ns_per_s * 30);
+    std.Thread.sleep(std.time.ns_per_s * 30);
     server.deinit();
 
     const leaks = gpa.detectLeaks();
