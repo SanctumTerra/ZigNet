@@ -35,10 +35,10 @@ pub const Frame = struct {
         allocator.free(self.payload);
     }
 
-    pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) Frame {
-        const flags = stream.readUint8();
+    pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) !Frame {
+        const flags = try stream.readUint8();
         const reliability: Reliability = @as(Reliability, @enumFromInt((flags & 224) >> 5));
-        const length = stream.readUint16(.Big);
+        const length = try stream.readUint16(.Big);
         const payload_length = (length + 7) / 8;
         const split = (flags & @intFromEnum(Flags.Split)) != 0;
 
@@ -57,30 +57,30 @@ pub const Frame = struct {
 
         switch (reliability) {
             .Reliable, .ReliableOrdered, .ReliableSequenced, .ReliableWithAckReceipt, .ReliableOrderedWithAckReceipt => {
-                reliable_frame_index = stream.readUint24(.Little);
+                reliable_frame_index = try stream.readUint24(.Little);
             },
             else => {},
         }
 
         switch (reliability) {
             .UnreliableSequenced, .ReliableSequenced => {
-                sequence_frame_index = stream.readUint24(.Little);
+                sequence_frame_index = try stream.readUint24(.Little);
             },
             else => {},
         }
 
         switch (reliability) {
             .ReliableOrdered, .ReliableOrderedWithAckReceipt => {
-                ordered_frame_index = stream.readUint24(.Little);
-                order_channel = stream.readUint8();
+                ordered_frame_index = try stream.readUint24(.Little);
+                order_channel = try stream.readUint8();
             },
             else => {},
         }
 
         if (split) {
-            split_size = stream.readUint32(.Big);
-            split_id = stream.readUint16(.Big);
-            split_frame_index = stream.readUint32(.Big);
+            split_size = try stream.readUint32(.Big);
+            split_id = try stream.readUint16(.Big);
+            split_frame_index = try stream.readUint32(.Big);
         }
 
         const temp_payload = stream.read(payload_length);
@@ -89,29 +89,29 @@ pub const Frame = struct {
         return Frame.init(reliable_frame_index, sequence_frame_index, ordered_frame_index, order_channel, reliability, owned_payload, split_frame_index, split_id, split_size, allocator);
     }
 
-    pub fn write(self: *const Frame, stream: *BinaryStream) void {
+    pub fn write(self: *const Frame, stream: *BinaryStream) !void {
         const flags: u8 = ((@as(u8, @intFromEnum(self.reliability)) << 5) & 0xe0) |
             if (self.isSplit()) @intFromEnum(Flags.Split) else 0;
-        stream.writeUint8(flags);
+        try stream.writeUint8(flags);
         const length_in_bits = @as(u16, @intCast(self.payload.len)) * 8;
-        stream.writeUint16(length_in_bits, .Big);
+        try stream.writeUint16(length_in_bits, .Big);
 
         if (self.isReliable()) {
-            stream.writeUint24(@as(u24, @truncate(self.reliable_frame_index.?)), .Little);
+            try stream.writeUint24(@as(u24, @truncate(self.reliable_frame_index.?)), .Little);
         }
         if (self.isSequenced()) {
-            stream.writeUint24(@as(u24, @truncate(self.sequence_frame_index.?)), .Little);
+            try stream.writeUint24(@as(u24, @truncate(self.sequence_frame_index.?)), .Little);
         }
         if (self.isOrdered()) {
-            stream.writeUint24(@as(u24, @truncate(self.ordered_frame_index.?)), .Little);
-            stream.writeUint8(self.order_channel.?);
+            try stream.writeUint24(@as(u24, @truncate(self.ordered_frame_index.?)), .Little);
+            try stream.writeUint8(self.order_channel.?);
         }
         if (self.isSplit()) {
-            stream.writeUint32(self.split_size.?, .Big);
-            stream.writeUint16(self.split_id.?, .Big);
-            stream.writeUint32(self.split_frame_index.?, .Big);
+            try stream.writeUint32(self.split_size.?, .Big);
+            try stream.writeUint16(self.split_id.?, .Big);
+            try stream.writeUint32(self.split_frame_index.?, .Big);
         }
-        stream.write(self.payload);
+        try stream.write(self.payload);
     }
 
     pub fn isSplit(self: *const Frame) bool {
