@@ -53,8 +53,11 @@ pub const Server = struct {
         while (self.running) {
             const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
             self.connections_mutex.lock();
-            var to_remove = std.ArrayList([]const u8).init(self.options.allocator);
-            defer to_remove.deinit();
+
+            const buffer: [][]const u8 = &[_][]const u8{};
+            var to_remove = std.ArrayList([]const u8).initBuffer(buffer);
+
+            defer to_remove.deinit(self.options.allocator);
 
             {
                 var itter = self.connections.iterator();
@@ -62,7 +65,7 @@ pub const Server = struct {
                     if (val.value_ptr.active) {
                         val.value_ptr.tick();
                     } else {
-                        to_remove.append(val.key_ptr.*) catch {
+                        to_remove.append(self.options.allocator, val.key_ptr.*) catch {
                             Logger.ERROR("Failed to append to removal list", .{});
                             continue;
                         };
@@ -88,7 +91,7 @@ pub const Server = struct {
                 Logger.DEBUG("PERF: tickLoop took {d} ms", .{elapsed});
             }
 
-            std.time.sleep(std.time.ns_per_s / @as(u64, self.options.tick_rate));
+            std.Thread.sleep(std.time.ns_per_s / @as(u64, self.options.tick_rate));
         }
     }
 
@@ -146,7 +149,10 @@ pub const Server = struct {
                     return;
                 };
                 defer pong.deinit(allocator); // must deinig the pong data.
-                const pong_data = pong.serialize(self.options.allocator);
+                const pong_data = pong.serialize(self.options.allocator) catch |err| {
+                    Logger.ERROR("Failed to serialize unconnected pong: {s}", .{@errorName(err)});
+                    return;
+                };
                 defer self.options.allocator.free(pong_data);
                 self.send(pong_data, from_addr);
             },
@@ -156,12 +162,19 @@ pub const Server = struct {
                     false,
                     1492,
                 );
-                const reply_data = reply.serialize(self.options.allocator);
+                const reply_data = reply.serialize(self.options.allocator) catch |err| {
+                    Logger.ERROR("Failed to serialize connection reply 1: {s}", .{@errorName(err)});
+                    return;
+                };
                 defer self.options.allocator.free(reply_data);
                 self.send(reply_data, from_addr);
             },
             Packets.OpenConnectionRequest2 => {
-                const request = Proto.ConnectionRequest2.deserialize(data, self.options.allocator);
+                const request = Proto.ConnectionRequest2.deserialize(data, self.options.allocator) catch |err| {
+                    Logger.ERROR("Failed to deserialize connection request 2: {s}", .{@errorName(err)});
+                    return;
+                };
+
                 defer request.address.deinit(allocator);
                 const address = Proto.Address.init(4, "0.0.0.0", 0);
 
@@ -171,7 +184,11 @@ pub const Server = struct {
                     request.mtu_size,
                     false,
                 );
-                const reply_data = reply.serialize(self.options.allocator);
+                const reply_data = reply.serialize(self.options.allocator) catch |err| {
+                    Logger.ERROR("Failed to serialize connection reply 2: {s}", .{@errorName(err)});
+                    return;
+                };
+
                 defer self.options.allocator.free(reply_data);
                 self.send(reply_data, from_addr);
 
@@ -354,13 +371,14 @@ pub const Server = struct {
         }
 
         // Use a separate loop to clear and free all keys to avoid iterator invalidation
-        var key_list = std.ArrayList([]const u8).init(self.options.allocator);
-        defer key_list.deinit();
+        const buffer: [][]const u8 = &[_][]const u8{};
+        var key_list = std.ArrayList([]const u8).initBuffer(buffer);
+        defer key_list.deinit(self.options.allocator);
 
         {
             var key_it = self.connections.keyIterator();
             while (key_it.next()) |key_ptr| {
-                key_list.append(key_ptr.*) catch {
+                key_list.append(self.options.allocator, key_ptr.*) catch {
                     Logger.ERROR("Failed to append to key list during cleanup", .{});
                     continue;
                 };
