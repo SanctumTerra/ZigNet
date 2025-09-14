@@ -9,6 +9,9 @@ pub const SocketError = @import("./socket/socket.zig").SocketError;
 pub const Logger = @import("./misc/Logger.zig").Logger;
 pub const LoggerColors = @import("./misc/Logger.zig").Colors;
 
+pub const Client = @import("./client/client.zig").Client;
+pub const ClientOptions = @import("./client/client.zig").ClientOptions;
+
 test "all" {
     std.testing.refAllDecls(@import("proto/offline/UnconnectedPong.zig"));
     std.testing.refAllDecls(@import("proto/offline/UnconnectedPing.zig"));

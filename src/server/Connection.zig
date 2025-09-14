@@ -24,6 +24,9 @@ pub const Connection = struct {
     last_receive: i64,
     game_packet_callback: ?GamePacketCallback,
     game_packet_context: ?*anyopaque,
+    tickCounter: u64 = 0,
+    last_ping_time: i64 = 0,
+    ping_interval: i64 = 5000, // Send ping every 5 seconds
 
     pub fn init(server: *Server, address: std.net.Address, mtu_size: u16, guid: i64) !Self {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(server.options.allocator);
@@ -107,6 +110,35 @@ pub const Connection = struct {
                     Logger.WARN("Received game packet (254) but no callback set", .{});
                 }
             },
+            Proto.Packets.ConnectedPing => {
+                const ping = Proto.ConnectedPing.deserialize(payload, allocator) catch |err| {
+                    Logger.ERROR("Failed to deserialize ConnectedPing: {any}", .{err});
+                    return;
+                };
+                const current_time = std.time.milliTimestamp();
+                var pong = Proto.ConnectedPong.init(ping.timestamp, current_time);
+                defer pong.deinit(allocator);
+
+                const serialized = pong.serialize(allocator) catch |err| {
+                    Logger.ERROR("Failed to serialize ConnectedPong: {any}", .{err});
+                    return;
+                };
+                defer allocator.free(serialized);
+
+                const frame = frameIn(serialized, allocator);
+                self.sendFrame(frame, .Immediate);
+                Logger.DEBUG("Responded to ConnectedPing with ConnectedPong", .{});
+            },
+            Proto.Packets.ConnectedPong => {
+                const pong = Proto.ConnectedPong.deserialize(payload, allocator) catch |err| {
+                    Logger.ERROR("Failed to deserialize ConnectedPong: {any}", .{err});
+                    return;
+                };
+                const current_time = std.time.milliTimestamp();
+                const rtt = current_time - pong.timestamp; // Round trip time
+                Logger.DEBUG("Received ConnectedPong - RTT: {d}ms", .{rtt});
+                // Here you could store RTT statistics if needed
+            },
             else => {
                 Logger.WARN("Unhandeled Packet {d}", .{ID});
             },
@@ -177,6 +209,19 @@ pub const Connection = struct {
             mutable_serialized[0] = Proto.Packets.Nack;
             self.send(mutable_serialized);
         }
+
+        if (self.tickCounter / 50 == 0) {}
+
+        // Send ping every ping_interval milliseconds if connected
+        if (self.connected) {
+            const current_time = std.time.milliTimestamp();
+            if (current_time - self.last_ping_time >= self.ping_interval) {
+                self.sendPing();
+                self.last_ping_time = current_time;
+            }
+        }
+
+        self.tickCounter += 1;
 
         if (PERFORM_TIME_CHECKS) {
             const end_time = std.time.milliTimestamp();
@@ -737,6 +782,26 @@ pub const Connection = struct {
 
     pub fn isActive(self: *const Connection) bool {
         return self.active;
+    }
+
+    /// Send a ConnectedPing packet to the client
+    pub fn sendPing(self: *Connection) void {
+        const allocator = self.server.options.allocator;
+        const timestamp = std.time.milliTimestamp();
+
+        var ping = Proto.ConnectedPing.init(timestamp);
+        defer ping.deinit(allocator);
+
+        const serialized = ping.serialize(allocator) catch |err| {
+            Logger.ERROR("Failed to serialize ConnectedPing: {any}", .{err});
+            return;
+        };
+        defer allocator.free(serialized);
+
+        const frame = frameIn(serialized, allocator);
+        self.sendFrame(frame, .Normal);
+
+        Logger.DEBUG("Sent ConnectedPing with timestamp: {d}", .{timestamp});
     }
 };
 

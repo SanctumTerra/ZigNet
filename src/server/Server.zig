@@ -18,7 +18,6 @@ pub const Server = struct {
     const Self = @This();
     options: ServerOptions,
     socket: Socket,
-    tick_thread: ?Thread,
     running: bool = false,
     connections: std.StringHashMap(Connection),
     connections_mutex: Mutex, // Add mutex for connections HashMap

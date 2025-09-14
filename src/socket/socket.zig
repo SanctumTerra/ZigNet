@@ -307,7 +307,7 @@ pub const Socket = struct {
         };
 
         self.is_listening.store(true, .release);
-        std.log.info("Socket listening on {any}", .{self.bind_address});
+        // std.log.info("Socket listening on {any}", .{self.bind_address});
     }
 
     fn bindSocket(self: *Self) SocketError!void {

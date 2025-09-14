@@ -15,3 +15,7 @@ pub const Reliability = @import("./Frame.zig").Reliability;
 pub const ConnectionRequest = @import("./online/ConnectionRequest.zig").ConnectionRequest;
 pub const ConnectionRequestAccepted = @import("./online/ConnectionRequestAccepted.zig").ConnectionRequestAccepted;
 pub const Ack = @import("./online/Ack.zig").Ack;
+pub const NewIncomingConnection = @import("./online/NewIncomingConnection.zig").NewIncomingConnection;
+pub const Magic = @import("./Magic.zig").Magic;
+pub const ConnectedPing = @import("./online/ConnectedPing.zig").ConnectedPing;
+pub const ConnectedPong = @import("./online/ConnectedPong.zig").ConnectedPong;
