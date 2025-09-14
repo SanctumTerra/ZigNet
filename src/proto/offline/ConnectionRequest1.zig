@@ -12,31 +12,28 @@ pub const ConnectionRequest1 = struct {
         _ = allocator;
     }
 
-    pub fn serialize(self: *ConnectionRequest1, allocator: std.mem.Allocator) []const u8 {
+    pub fn serialize(self: *ConnectionRequest1, allocator: std.mem.Allocator) ![]const u8 {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
-        VarInt.write(&stream, Packets.OpenConnectionRequest1);
-        Magic.write(&stream);
-        stream.writeUint8(@as(u8, @intCast(self.protocol)));
+        try VarInt.write(&stream, Packets.OpenConnectionRequest1);
+        try Magic.write(&stream);
+        try stream.writeUint8(@as(u8, @intCast(self.protocol)));
         const current_size = @as(u16, @intCast(stream.payload.items.len));
         const padding_size = self.mtu_size - Server.UDP_HEADER_SIZE - current_size;
         const zeros = allocator.alloc(u8, padding_size) catch @panic("Failed to allocate padding");
         defer allocator.free(zeros);
         @memset(zeros, 0);
-        stream.write(zeros);
-        return stream.getBufferOwned(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize connection request 1: {}", .{err});
-            return &[_]u8{};
-        };
+        try stream.write(zeros);
+        return try stream.getBufferOwned(allocator);
     }
 
-    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) ConnectionRequest1 {
+    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectionRequest1 {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
-        _ = VarInt.read(&stream);
-        Magic.read(&stream);
-        const protocol = stream.readUint8();
+        _ = try VarInt.read(&stream);
+        try Magic.read(&stream);
+        const protocol = try stream.readUint8();
         var mtu_size = @as(u16, @intCast(stream.payload.items.len));
         if (mtu_size + Server.UDP_HEADER_SIZE <= Server.MAX_MTU_SIZE) {
             mtu_size = mtu_size + Server.UDP_HEADER_SIZE;
@@ -52,10 +49,10 @@ test "ConnectionRequest1" {
     var connection_request1 = ConnectionRequest1.init(11, 1492);
     defer connection_request1.deinit(allocator);
 
-    const serialized = connection_request1.serialize(allocator);
+    const serialized = try connection_request1.serialize(allocator);
     defer allocator.free(serialized);
 
-    var deserialized = ConnectionRequest1.deserialize(serialized, allocator);
+    var deserialized = try ConnectionRequest1.deserialize(serialized, allocator);
     defer deserialized.deinit(allocator);
 
     try std.testing.expectEqual(connection_request1.protocol, deserialized.protocol);
