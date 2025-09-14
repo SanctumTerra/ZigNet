@@ -122,7 +122,7 @@ pub const Socket = struct {
 
     pub fn init(allocator: Allocator, host: []const u8, port: u16) SocketError!Self {
         const bind_address = parseAddress(host, port) catch |err| {
-            std.log.err("Failed to parse address {s}:{d}: {}", .{ host, port, err });
+            std.log.err("Failed to parse address {s}:{d}: {any}", .{ host, port, err });
             return SocketError.AddressParseError;
         };
 
@@ -238,7 +238,7 @@ pub const Socket = struct {
             posix.SOCK.DGRAM | std.os.linux.SOCK.NONBLOCK | std.os.linux.SOCK.CLOEXEC,
             0,
         ) catch |err| {
-            std.log.err("Failed to create socket: {}", .{err});
+            std.log.err("Failed to create socket: {any}", .{err});
             return err;
         };
 
@@ -302,12 +302,12 @@ pub const Socket = struct {
         self.consecutive_errors.store(0, .release);
 
         self.thread = Thread.spawn(.{}, receiveLoop, .{self}) catch |err| {
-            std.log.err("Failed to spawn receive thread: {}", .{err});
+            std.log.err("Failed to spawn receive thread: {any}", .{err});
             return SocketError.ThreadSpawnFailed;
         };
 
         self.is_listening.store(true, .release);
-        std.log.info("Socket listening on {}", .{self.bind_address});
+        std.log.info("Socket listening on {any}", .{self.bind_address});
     }
 
     fn bindSocket(self: *Self) SocketError!void {
@@ -326,7 +326,7 @@ pub const Socket = struct {
                 &self.bind_address.any,
                 self.bind_address.getOsSockLen(),
             ) catch |err| {
-                std.log.err("Socket bind failed: {}", .{err});
+                std.log.err("Socket bind failed: {any}", .{err});
                 return err;
             };
         }
@@ -383,7 +383,7 @@ pub const Socket = struct {
                         break;
                     },
                     .error_fatal => |err| {
-                        std.log.err("Fatal socket error: {}", .{err});
+                        std.log.err("Fatal socket error: {any}", .{err});
                         return;
                     },
                 }
@@ -392,15 +392,15 @@ pub const Socket = struct {
             // Adaptive sleep strategy based on system activity
             if (buffer_shortage) {
                 // Sleep briefly to let buffers free up
-                std.time.sleep(current_sleep_ns / 2);
+                std.Thread.sleep(current_sleep_ns / 2);
             } else if (packets_processed > 0) {
                 // We processed some packets, stay responsive
-                std.time.sleep(Config.BASE_SLEEP_NS);
+                std.Thread.sleep(Config.BASE_SLEEP_NS);
                 // Keep the current_sleep_ns at minimum when active
                 current_sleep_ns = Config.BASE_SLEEP_NS;
             } else {
                 // No packets processed, use adaptive sleep
-                std.time.sleep(current_sleep_ns);
+                std.Thread.sleep(current_sleep_ns);
             }
         }
     }
@@ -415,7 +415,7 @@ pub const Socket = struct {
         if (callback) |cb| {
             // Create a copy of the data that will be freed by the callback
             const data_copy = self.allocator.dupe(u8, data) catch |err| {
-                std.log.err("Failed to copy packet data: {}", .{err});
+                std.log.err("Failed to copy packet data: {any}", .{err});
                 return;
             };
 
@@ -429,14 +429,14 @@ pub const Socket = struct {
 
         // Only log errors for the first few occurrences to avoid spamming
         if (error_count <= 3) {
-            std.log.warn("Socket error ({}): {}", .{ error_count, err });
+            std.log.warn("Socket error ({any}): {any}", .{ error_count, err });
         } else if (error_count == 5 or error_count % 100 == 0) {
             // Only log periodically after many errors
-            std.log.err("Network errors continuing (count: {}), client likely disconnected", .{error_count});
-            std.time.sleep(Config.IDLE_SLEEP_NS); // Longer backoff
+            std.log.err("Network errors continuing (count: {d}), client likely disconnected", .{error_count});
+            std.Thread.sleep(Config.IDLE_SLEEP_NS); // Longer backoff
         } else {
             // Just back off without logging
-            std.time.sleep(Config.BASE_SLEEP_NS * 5);
+            std.Thread.sleep(Config.BASE_SLEEP_NS * 5);
         }
     }
 
@@ -585,7 +585,7 @@ pub const Socket = struct {
                 &to_addr.any,
                 to_addr.getOsSockLen(),
             ) catch |err| {
-                std.log.err("sendto failed: {}", .{err});
+                std.log.err("sendto failed: {any}", .{err});
                 return err;
             };
         }
@@ -593,7 +593,7 @@ pub const Socket = struct {
 
     pub fn sendTo(self: *Self, data: []const u8, host: []const u8, port: u16) SocketError!void {
         const addr = parseAddress(host, port) catch |err| {
-            std.log.err("Failed to parse destination address {s}:{d}: {}", .{ host, port, err });
+            std.log.err("Failed to parse destination address {s}:{d}: {any}", .{ host, port, err });
             return SocketError.AddressParseError;
         };
         try self.send(data, addr);
