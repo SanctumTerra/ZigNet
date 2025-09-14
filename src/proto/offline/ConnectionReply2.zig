@@ -36,7 +36,7 @@ pub const ConnectionReply2 = struct {
         const guid = try stream.readInt64(.Big);
         const address = try Address.read(&stream, allocator);
         const mtu = try stream.readUint16(.Big);
-        const encryption_enabled = stream.readBool();
+        const encryption_enabled = try stream.readBool();
         return .{ .guid = guid, .address = address, .mtu = mtu, .encryption_enabled = encryption_enabled };
     }
 };
@@ -47,7 +47,7 @@ const Magic = @import("../Magic.zig").Magic;
 const VarInt = @import("BinaryStream").VarInt;
 
 test "ConnectionReply2" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const test_address = Address.init(4, "1.1.1.1", 19132);
     var connection_reply2 = ConnectionReply2.init(987654321, test_address, 1492, false);
 

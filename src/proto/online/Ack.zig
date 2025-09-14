@@ -165,7 +165,7 @@ test "Ack" {
     var ack = try Ack.init(&test_sequences, allocator);
     defer ack.deinit();
 
-    const serialized = ack.serialize(allocator);
+    const serialized = try ack.serialize(allocator);
     defer allocator.free(serialized);
 
     var deserialized = try Ack.deserialize(serialized, allocator);
