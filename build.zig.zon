@@ -2,11 +2,11 @@
     .name = .ZigNet,
     .version = "0.0.0",
     .fingerprint = 0x1be2dab92242d60b, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.0-dev.920+b461d07a5",
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .BinaryStream = .{
-            .url = "git+https://github.com/SanctumTerra/BinaryStream#dd792a5bc4d68787a7e0e09f5b83a397c0780974",
-            .hash = "BinaryStream-0.0.0-gn8mmp8mAQBcrTiSkmuHGmgcxX_RzcHjD-CGoPVdizSN",
+            .url = "git+https://github.com/SanctumTerra/BinaryStream?ref=master#9d8aeeefe68a99314cf423cc18b3d6a7cc0ec24f",
+            .hash = "BinaryStream-0.0.0-gn8mmk8wAQBhVdhDnqi81jqGZfZRebG6a4hXFBeoqpF2",
         },
     },
     .paths = .{
