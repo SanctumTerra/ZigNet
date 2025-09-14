@@ -20,37 +20,37 @@ pub const ConnectionRequestAccepted = struct {
         };
     }
 
-    pub fn serialize(self: *const ConnectionRequestAccepted, allocator: std.mem.Allocator) []const u8 {
+    pub fn serialize(self: *const ConnectionRequestAccepted, allocator: std.mem.Allocator) ![]const u8 {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
 
-        VarInt.write(&stream, Packets.ConnectionRequestAccepted);
+        try VarInt.write(&stream, Packets.ConnectionRequestAccepted);
 
         const address_buffer = self.address.write(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize client address: {}", .{err});
+            Logger.ERROR("Failed to serialize client address: {any}", .{err});
             return &[_]u8{};
         };
         defer allocator.free(address_buffer);
-        stream.write(address_buffer);
-        stream.writeUint16(self.system_index, .Big);
+        try stream.write(address_buffer);
+        try stream.writeUint16(self.system_index, .Big);
 
         const internal_address_buffer = self.addresses.write(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize internal system address: {}", .{err});
+            Logger.ERROR("Failed to serialize internal system address: {any}", .{err});
             return &[_]u8{};
         };
         defer allocator.free(internal_address_buffer);
 
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
-            stream.write(internal_address_buffer);
+            try stream.write(internal_address_buffer);
         }
 
-        stream.writeInt64(self.request_timestamp, .Big);
-        stream.writeInt64(self.timestamp, .Big);
+        try stream.writeInt64(self.request_timestamp, .Big);
+        try stream.writeInt64(self.timestamp, .Big);
 
         return stream.getBufferOwned(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize ConnectionRequestAccepted: {}", .{err});
+            Logger.ERROR("Failed to serialize ConnectionRequestAccepted: {any}", .{err});
             return &[_]u8{};
         };
     }
@@ -60,14 +60,14 @@ pub const ConnectionRequestAccepted = struct {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
 
-        _ = VarInt.read(&stream); // Skip Packet ID
+        _ = try VarInt.read(&stream); // Skip Packet ID
 
         const client_address = Address.read(&stream, allocator) catch |err| {
-            Logger.ERROR("Failed to deserialize client address: {}", .{err});
+            Logger.ERROR("Failed to deserialize client address: {any}", .{err});
             return err;
         };
 
-        const system_idx = stream.readUint16(.Big);
+        const system_idx = try stream.readUint16(.Big);
 
         var system_addresses_array: [10]Address = undefined;
         var first_system_address: Address = undefined;
@@ -76,7 +76,7 @@ pub const ConnectionRequestAccepted = struct {
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
             system_addresses_array[i] = Address.read(&stream, allocator) catch |err| {
-                Logger.ERROR("Failed to deserialize system address index {}: {}", .{ i, err });
+                Logger.ERROR("Failed to deserialize system address index {any}: {any}", .{ i, err });
                 // Deallocate successfully deserialized addresses before this one
                 var k: u8 = 0;
                 while (k < i) : (k += 1) {
@@ -96,8 +96,8 @@ pub const ConnectionRequestAccepted = struct {
             system_addresses_array[i].deinit(allocator);
         }
 
-        const req_timestamp = stream.readInt64(.Big);
-        const server_timestamp = stream.readInt64(.Big);
+        const req_timestamp = try stream.readInt64(.Big);
+        const server_timestamp = try stream.readInt64(.Big);
 
         return ConnectionRequestAccepted.init(
             client_address,
@@ -120,7 +120,7 @@ test "ConnectionRequestAccepted" {
 
     var connection_request_accepted = ConnectionRequestAccepted.init(client_address, 0, system_address, 123456789, 987654321);
 
-    const serialized = connection_request_accepted.serialize(allocator);
+    const serialized = try connection_request_accepted.serialize(allocator);
     defer allocator.free(serialized);
 
     var deserialized = try ConnectionRequestAccepted.deserialize(serialized, allocator);
