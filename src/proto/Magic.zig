@@ -6,11 +6,11 @@ pub const MagicBytes: [16]u8 = [16]u8{
 };
 
 pub const Magic = struct {
-    pub fn read(stream: *BinaryStream) void {
+    pub fn read(stream: *BinaryStream) !void {
         stream.offset += 16; // Skip 16 bytes
     }
 
-    pub fn write(stream: *BinaryStream) void {
-        stream.write(&MagicBytes);
+    pub fn write(stream: *BinaryStream) !void {
+        try stream.write(&MagicBytes);
     }
 };
