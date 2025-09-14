@@ -12,11 +12,11 @@ pub const FrameSet = struct {
         var stream = BinaryStream.init(allocator, null, null);
         defer stream.deinit();
 
-        stream.writeUint8(Packets.FrameSet);
-        stream.writeUint24(self.sequence_number, .Little);
+        try stream.writeUint8(Packets.FrameSet);
+        try stream.writeUint24(self.sequence_number, .Little);
 
         for (self.frames) |frame| {
-            frame.write(&stream);
+            try frame.write(&stream);
         }
 
         return stream.getBufferOwned(allocator);
@@ -26,23 +26,23 @@ pub const FrameSet = struct {
         var stream = BinaryStream.init(allocator, data, null);
         defer stream.deinit();
 
-        _ = stream.readUint8(); // Skip packet type
-        const sequence_number = stream.readUint24(.Little);
+        _ = try stream.readUint8(); // Skip packet type
+        const sequence_number = try stream.readUint24(.Little);
 
-        var frames = std.ArrayList(Frame).init(allocator);
+        var frames = std.ArrayList(Frame).initBuffer(&[_]Frame{}); // Start with an empty buffer
         errdefer {
             for (frames.items) |frame| frame.deinit(allocator);
-            frames.deinit();
+            frames.deinit(allocator);
         }
         const end_position = stream.payload.items.len;
         while (stream.offset < end_position) {
-            const frame = Frame.read(&stream, allocator);
-            try frames.append(frame);
+            const frame = try Frame.read(&stream, allocator);
+            try frames.append(allocator, frame);
         }
 
         return FrameSet{
             .sequence_number = sequence_number,
-            .frames = try frames.toOwnedSlice(),
+            .frames = try frames.toOwnedSlice(allocator),
         };
     }
 
