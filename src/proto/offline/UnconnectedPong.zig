@@ -22,30 +22,27 @@ pub const UnconnectedPong = struct {
     pub fn serialize(
         self: *UnconnectedPong,
         allocator: std.mem.Allocator,
-    ) []const u8 {
+    ) ![]const u8 {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
-        VarInt.write(&stream, Packets.UnconnectedPong);
-        stream.writeInt64(self.timestamp, .Big);
-        stream.writeInt64(self.guid, .Big);
-        Magic.write(&stream);
-        stream.writeString16(self.message, .Big);
-        const payload = stream.getBufferOwned(allocator) catch {
-            Logger.ERROR("Failed to serialize unconnected pong", .{});
-            return "";
-        };
+        try VarInt.write(&stream, Packets.UnconnectedPong);
+        try stream.writeInt64(self.timestamp, .Big);
+        try stream.writeInt64(self.guid, .Big);
+        try Magic.write(&stream);
+        try stream.writeString16(self.message, .Big);
+        const payload = try stream.getBufferOwned(allocator);
         return payload;
     }
 
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !UnconnectedPong {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
-        _ = VarInt.read(&stream);
-        const timestamp = stream.readInt64(.Big);
-        const guid = stream.readInt64(.Big);
-        Magic.read(&stream);
-        const message = stream.readString16(.Big);
+        _ = try VarInt.read(&stream);
+        const timestamp = try stream.readInt64(.Big);
+        const guid = try stream.readInt64(.Big);
+        try Magic.read(&stream);
+        const message = try stream.readString16(.Big);
         const owned_message = try allocator.dupe(u8, message);
         return .{ .timestamp = timestamp, .guid = guid, .message = owned_message };
     }
@@ -56,7 +53,7 @@ test "Unconnected Pong" {
     var pong = try UnconnectedPong.init(allocator, 123456789, 987654321, "Hello World!");
     defer pong.deinit(allocator);
 
-    const serialized = pong.serialize(allocator);
+    const serialized = try pong.serialize(allocator);
     defer allocator.free(serialized);
 
     var deserialized = try UnconnectedPong.deserialize(serialized, allocator);
