@@ -33,7 +33,7 @@ pub const Address = struct {
         };
 
         var buf: [48]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&buf, "{}", .{addr}) catch |err| {
+        const formatted = std.fmt.bufPrint(&buf, "{s}", .{addr}) catch |err| {
             std.log.err("Failed to format address: {s}", .{@errorName(err)});
             return err;
         };
@@ -138,17 +138,17 @@ pub const Address = struct {
     }
 
     pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) !Address {
-        const version = stream.readUint8();
+        const version = try stream.readUint8();
 
         return switch (version) {
             4 => {
                 var ipv4_bytes: [4]u8 = undefined;
                 for (0..4) |i| {
-                    const byte = stream.readUint8();
+                    const byte = try stream.readUint8();
                     ipv4_bytes[i] = ~byte & 0xff;
                 }
-                const port = stream.readUint16(.Big);
-                const address_str = try std.fmt.allocPrint(allocator, "{}.{}.{}.{}", .{ ipv4_bytes[0], ipv4_bytes[1], ipv4_bytes[2], ipv4_bytes[3] });
+                const port = try stream.readUint16(.Big);
+                const address_str = try std.fmt.allocPrint(allocator, "{d}.{d}.{d}.{d}", .{ ipv4_bytes[0], ipv4_bytes[1], ipv4_bytes[2], ipv4_bytes[3] });
                 return Address{
                     .version = version,
                     .port = port,
@@ -157,18 +157,18 @@ pub const Address = struct {
             },
 
             6 => {
-                _ = stream.readUint16(.Big); // Skip IPv6 header (23)
-                const port = stream.readUint16(.Big);
-                _ = stream.readUint32(.Big); // Skip padding
+                _ = try stream.readUint16(.Big); // Skip IPv6 header (23)
+                const port = try stream.readUint16(.Big);
+                _ = try stream.readUint32(.Big); // Skip padding
 
                 var address_parts: [8]u16 = undefined;
 
                 for (0..8) |i| {
-                    const word = stream.readUint16(.Big);
+                    const word = try stream.readUint16(.Big);
                     address_parts[i] = word ^ 0xffff;
                 }
 
-                _ = stream.readUint32(.Big); // Skip final padding
+                _ = try stream.readUint32(.Big); // Skip final padding
 
                 const address_str = try std.fmt.allocPrint(allocator, "{x:0>4}:{x:0>4}:{x:0>4}:{x:0>4}:{x:0>4}:{x:0>4}:{x:0>4}:{x:0>4}", .{
                     address_parts[0], address_parts[1], address_parts[2], address_parts[3],
