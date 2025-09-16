@@ -30,13 +30,29 @@ pub fn main() !void {
     var client = try Client.init(.{
         .allocator = allocator,
     });
-
-    defer client.deinit();
     try client.connect();
 
-    while (client.status != .Disconnected) {
+    client.setConnectionCallback(
+        onConnect,
+        null,
+    );
+    client.setGamePacketCallback(
+        onGamePacket,
+        null,
+    );
+    client.setDisconnectionCallback(
+        onDisconnect,
+        null,
+    );
+
+    const time_start = std.time.milliTimestamp();
+    while (std.time.milliTimestamp() - time_start < 5000 and client.status != .Disconnected) {
         std.Thread.sleep(std.time.ns_per_s);
     }
+    std.Thread.sleep(std.time.ns_per_s);
+    client.status = .Disconnected;
+    client.deinit();
+
     const leaks = gpa.detectLeaks();
     if (leaks) {
         Logger.ERROR("Leaks detected", .{});
@@ -45,17 +61,19 @@ pub fn main() !void {
     }
 }
 
-fn onConnect(connection: *Connection, context: ?*anyopaque) void {
+fn onConnect(connection: *Client, context: ?*anyopaque) void {
     _ = context;
-    Logger.INFO("Client connected", .{});
+    Logger.INFO("Connection connected", .{});
     connection.setGamePacketCallback(onGamePacket, null);
 }
-fn onDisconnect(connection: *Connection, context: ?*anyopaque) void {
+
+fn onDisconnect(connection: *Client, context: ?*anyopaque) void {
     _ = context;
-    Logger.INFO("Client disconnected", .{});
-    connection.setGamePacketCallback(onGamePacket, null);
+    _ = connection;
+    Logger.INFO("Connection disconnected", .{});
 }
-fn onGamePacket(connection: *Connection, payload: []const u8, context: ?*anyopaque) void {
+
+fn onGamePacket(connection: *Client, payload: []const u8, context: ?*anyopaque) void {
     _ = connection;
     _ = context;
     Logger.INFO("Payload received: {any}", .{payload});

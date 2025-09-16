@@ -20,6 +20,10 @@ const ConnectedPong = @import("../proto/online/ConnectedPong.zig").ConnectedPong
 const MAX_ACTIVE_FRAGMENTATIONS = 32;
 const MAX_ORDERING_QUEUE_SIZE = 64;
 
+pub const GamePacketCallback = *const fn (connection: *Client, payload: []const u8, context: ?*anyopaque) void;
+pub const ConnectionCallback = *const fn (connection: *Client, context: ?*anyopaque) void;
+pub const DisconnectionCallback = *const fn (connection: *Client, context: ?*anyopaque) void;
+
 pub const Client = struct {
     pub const Self = @This();
     tick_thread: ?std.Thread,
@@ -28,6 +32,15 @@ pub const Client = struct {
     status: Status = .Disconnected,
     comm_data: CommData,
     last_receive: i64,
+
+    game_callback: ?GamePacketCallback = null,
+    connection_callback: ?ConnectionCallback = null,
+
+    game_callback_ctx: ?*anyopaque = null,
+    connection_callback_ctx: ?*anyopaque = null,
+
+    disconnection_callback: ?DisconnectionCallback = null,
+    disconnection_callback_ctx: ?*anyopaque = null,
 
     pub fn init(options: ClientOptions) !Client {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(options.allocator);
@@ -48,7 +61,7 @@ pub const Client = struct {
                 .input_ordering_queue = input_ordering_queue,
                 .output_reliable_index = 0,
                 .output_sequence = 0,
-                .output_frame_queue = std.ArrayList(Frame).initBuffer(&[_]Frame{}),
+                .output_frame_queue = try std.ArrayList(Frame).initCapacity(options.allocator, 0),
                 .output_backup = std.AutoHashMap(u24, []Frame).init(options.allocator),
                 .output_order_index = [_]u32{0} ** MAX_ACTIVE_FRAGMENTATIONS,
                 .output_sequence_index = [_]u32{0} ** MAX_ACTIVE_FRAGMENTATIONS,
@@ -75,6 +88,21 @@ pub const Client = struct {
         defer self.options.allocator.free(payload);
         try self.send(payload);
         // std.debug.print("Client sent OpenConnectionRequest1 to {s}:{d}\n", .{ self.options.address, self.options.port });
+    }
+
+    pub fn setGamePacketCallback(self: *Client, callback: ?GamePacketCallback, context: ?*anyopaque) void {
+        self.game_callback = callback;
+        self.game_callback_ctx = context;
+    }
+
+    pub fn setConnectionCallback(self: *Client, callback: ?ConnectionCallback, context: ?*anyopaque) void {
+        self.connection_callback = callback;
+        self.connection_callback_ctx = context;
+    }
+
+    pub fn setDisconnectionCallback(self: *Client, callback: ?DisconnectionCallback, context: ?*anyopaque) void {
+        self.disconnection_callback = callback;
+        self.disconnection_callback_ctx = context;
     }
 
     fn tickLoop(self: *Self) void {
@@ -110,10 +138,14 @@ pub const Client = struct {
                 defer allocator.free(ser);
 
                 try self.send(ser);
+                // defer address.deinit(allocator);
                 // std.debug.print("Client sent OpenConnectionRequest2 to {s}:{d}\n", .{ self.options.address, self.options.port });
             },
             Packets.OpenConnectionReply2 => {
                 const reply = try ConnectionReply2.deserialize(payload, allocator);
+                defer {
+                    reply.address.deinit(allocator);
+                }
                 // std.debug.print("Received connection reply 2: {any}\n", .{reply});
                 var request = ConnectionRequest.init(
                     self.options.guid,
@@ -125,7 +157,10 @@ pub const Client = struct {
 
                 const frame = frameIn(serialized, allocator);
                 self.sendFrame(frame, .Immediate);
-                std.debug.print("Client connected to {s}:{d}\n", .{ self.options.address, self.options.port });
+                if (self.connection_callback) |callback| {
+                    callback(self, self.connection_callback_ctx);
+                }
+                // std.debug.print("Client connected to {s}:{d}\n", .{ self.options.address, self.options.port });
             },
             Packets.FrameSet => {
                 try self.onFrameSet(payload);
@@ -147,6 +182,12 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
+        // Ensure thread stops before cleanup
+        self.status = .Disconnected;
+        if (self.tick_thread) |thread| {
+            thread.join();
+        }
+
         self.comm_data.deinit(self.options.allocator);
         self.socket.deinit();
     }
@@ -399,6 +440,10 @@ pub const Client = struct {
         switch (ID) {
             Proto.Packets.ConnectionRequestAccepted => {
                 const pak = try ConnectionRequestAccepted.deserialize(payload, allocator);
+                defer {
+                    pak.address.deinit(allocator);
+                    pak.addresses.deinit(allocator);
+                }
 
                 var nic = NewIncomingConnection.init(
                     Address.init(4, self.options.address, self.options.port),
@@ -415,9 +460,20 @@ pub const Client = struct {
             },
             Proto.Packets.DisconnectNotification => {
                 self.status = .Disconnected;
+                if (self.disconnection_callback) |callback| {
+                    callback(self, self.disconnection_callback_ctx);
+                } else {
+                    std.debug.print("Client disconnected by server\n", .{});
+                }
                 std.debug.print("Client disconnected by server\n", .{});
             },
             254 => {
+                if (self.game_callback) |callback| {
+                    callback(self, payload, self.game_callback_ctx);
+                } else {
+                    std.debug.print("Received game packet (ID 254) but no callback is set\n", .{});
+                }
+
                 // Game packet - could add callback here
                 std.debug.print("Received game packet (ID 254)\n", .{});
             },
@@ -546,6 +602,7 @@ pub const Client = struct {
             defer frame.deinit(self.options.allocator);
             return;
         };
+
         const should_send_immediately = priority == Priority.Immediate;
         const queue_len = self.comm_data.output_frame_queue.items.len;
         if (should_send_immediately) {
@@ -712,6 +769,9 @@ pub const CommData = struct {
     fragments_queue: std.AutoHashMap(u16, std.AutoHashMap(u16, Frame)),
 
     pub fn deinit(self: *CommData, allocator: std.mem.Allocator) void {
+        self.received_sequences.clearAndFree();
+        self.lost_sequences.clearAndFree();
+
         self.received_sequences.deinit();
         self.lost_sequences.deinit();
 

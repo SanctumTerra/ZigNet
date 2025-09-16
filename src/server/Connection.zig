@@ -26,7 +26,7 @@ pub const Connection = struct {
     game_packet_context: ?*anyopaque,
     tickCounter: u64 = 0,
     last_ping_time: i64 = 0,
-    ping_interval: i64 = 5000, // Send ping every 5 seconds
+    ping_interval: i64 = 5000,
 
     pub fn init(server: *Server, address: std.net.Address, mtu_size: u16, guid: i64) !Self {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(server.options.allocator);
