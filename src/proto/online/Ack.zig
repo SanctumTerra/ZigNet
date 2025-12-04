@@ -29,7 +29,10 @@ pub const Ack = struct {
         const record_count = try stream.readUint16(.Big);
 
         var sequences = std.ArrayList(u32).initBuffer(&[_]u32{});
-        defer sequences.deinit(allocator);
+        defer {
+            sequences.clearAndFree(allocator);
+            sequences.deinit(allocator);
+        }
 
         var index: usize = 0;
         while (index < record_count) : (index += 1) {
@@ -78,8 +81,10 @@ pub const Ack = struct {
         if (count > 0) {
             // Sort sequences first to match expected behavior
             var sorted_sequences = std.ArrayList(u32).initBuffer(&[_]u32{});
-            defer sorted_sequences.deinit(allocator);
-
+            defer {
+                sorted_sequences.clearAndFree(allocator);
+                sorted_sequences.deinit(allocator);
+            }
             sorted_sequences.appendSlice(allocator, self.sequences) catch return &[_]u8{};
             std.mem.sort(u32, sorted_sequences.items, {}, comptime std.sort.asc(u32));
 

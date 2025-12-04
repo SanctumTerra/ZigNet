@@ -32,6 +32,7 @@ pub const Frame = struct {
     }
 
     pub fn deinit(self: *const Frame, allocator: std.mem.Allocator) void {
+        if (self.payload.len == 0) return;
         allocator.free(self.payload);
     }
 

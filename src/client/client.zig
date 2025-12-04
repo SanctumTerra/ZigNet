@@ -17,8 +17,8 @@ const ConnectionRequestAccepted = @import("../proto/online/ConnectionRequestAcce
 const ConnectedPing = @import("../proto/online/ConnectedPing.zig").ConnectedPing;
 const ConnectedPong = @import("../proto/online/ConnectedPong.zig").ConnectedPong;
 
-const MAX_ACTIVE_FRAGMENTATIONS = 32;
-const MAX_ORDERING_QUEUE_SIZE = 64;
+const MAX_ACTIVE_FRAGMENTATIONS = 128;
+const MAX_ORDERING_QUEUE_SIZE = 128;
 
 pub const GamePacketCallback = *const fn (connection: *Client, payload: []const u8, context: ?*anyopaque) void;
 pub const ConnectionCallback = *const fn (connection: *Client, context: ?*anyopaque) void;
@@ -155,11 +155,10 @@ pub const Client = struct {
                 const serialized = try request.serialize(allocator);
                 defer allocator.free(serialized);
 
-                const frame = frameIn(serialized, allocator);
-                self.sendFrame(frame, .Immediate);
-                if (self.connection_callback) |callback| {
-                    callback(self, self.connection_callback_ctx);
-                }
+                var frame = frameIn(serialized, allocator);
+                self.sendFrame(&frame, .Immediate);
+                frame.deinit(allocator);
+
                 // std.debug.print("Client connected to {s}:{d}\n", .{ self.options.address, self.options.port });
             },
             Packets.FrameSet => {
@@ -262,7 +261,6 @@ pub const Client = struct {
     pub fn handleOrderedFrame(self: *Client, frame: Frame) void {
         if (self.status == .Disconnected) return;
 
-        Logger.DEBUG("Ordered Frame!", .{});
         const channel = frame.order_channel orelse {
             Logger.ERROR("Ordered frame missing order_channel", .{});
             return;
@@ -299,7 +297,11 @@ pub const Client = struct {
             if (unordered) |map| {
                 const payload_copy = self.options.allocator.dupe(u8, frame.payload) catch return;
                 const frame_copy = Frame.init(frame.reliable_frame_index, frame.sequence_frame_index, frame.ordered_frame_index, frame.order_channel, frame.reliability, payload_copy, frame.split_frame_index, frame.split_id, frame.split_size, self.options.allocator);
-                map.put(frame_index, frame_copy) catch return;
+                map.put(frame_index, frame_copy) catch {
+                    Logger.ERROR("Failed to put out-of-order frame into order queue", .{});
+                    frame_copy.deinit(self.options.allocator);
+                    return;
+                };
             }
         } else {
             self.handlePacket(frame.payload) catch |err| {
@@ -356,10 +358,22 @@ pub const Client = struct {
                 Logger.ERROR("Failed to duplicate payload for split frame", .{});
                 return;
             };
-            const frame_copy = Frame.init(frame.reliable_frame_index, frame.sequence_frame_index, frame.ordered_frame_index, frame.order_channel, frame.reliability, payload_copy, frame.split_frame_index, frame.split_id, frame.split_size, allocator);
+            const frame_copy = Frame.init(
+                frame.reliable_frame_index,
+                frame.sequence_frame_index,
+                frame.ordered_frame_index,
+                frame.order_channel,
+                frame.reliability,
+                payload_copy,
+                frame.split_frame_index,
+                frame.split_id,
+                frame.split_size,
+                allocator,
+            );
 
             fragment.put(@as(u16, @intCast(split_index)), frame_copy) catch {
                 Logger.ERROR("Failed to put split frame", .{});
+                frame_copy.deinit(allocator);
                 return;
             };
 
@@ -370,6 +384,13 @@ pub const Client = struct {
                 while (i < split_size) : (i += 1) {
                     if (fragment.get(i)) |f| {
                         total_length += f.payload.len;
+                    } else {
+                        Logger.ERROR("Missing fragment at index {d} for split_id {d}", .{ i, split_id });
+                        if (fragment.get(@as(u16, @intCast(split_index)))) |added_frame| {
+                            added_frame.deinit(allocator);
+                            _ = fragment.remove(@as(u16, @intCast(split_index)));
+                        }
+                        return;
                     }
                 }
 
@@ -397,7 +418,18 @@ pub const Client = struct {
                 _ = self.comm_data.fragments_queue.remove(split_id);
 
                 // Handle the combined frame
-                const combined_frame = Frame.init(frame.reliable_frame_index, frame.sequence_frame_index, frame.ordered_frame_index, frame.order_channel, frame.reliability, combined_payload, null, null, null, allocator);
+                const combined_frame = Frame.init(
+                    frame.reliable_frame_index,
+                    frame.sequence_frame_index,
+                    frame.ordered_frame_index,
+                    frame.order_channel,
+                    frame.reliability,
+                    combined_payload,
+                    null,
+                    null,
+                    null,
+                    allocator,
+                );
 
                 if (combined_frame.isSequenced()) {
                     self.handleSequencedFrame(combined_frame);
@@ -418,14 +450,29 @@ pub const Client = struct {
                 Logger.ERROR("Failed to duplicate payload for new split frame", .{});
                 return;
             };
-            const frame_copy = Frame.init(frame.reliable_frame_index, frame.sequence_frame_index, frame.ordered_frame_index, frame.order_channel, frame.reliability, payload_copy, frame.split_frame_index, frame.split_id, frame.split_size, allocator);
+            const frame_copy = Frame.init(
+                frame.reliable_frame_index,
+                frame.sequence_frame_index,
+                frame.ordered_frame_index,
+                frame.order_channel,
+                frame.reliability,
+                payload_copy,
+                frame.split_frame_index,
+                frame.split_id,
+                frame.split_size,
+                allocator,
+            );
 
             new_fragment.put(@as(u16, @intCast(split_index)), frame_copy) catch {
                 Logger.ERROR("Failed to put new split frame", .{});
+                frame_copy.deinit(allocator);
+                new_fragment.deinit();
                 return;
             };
             self.comm_data.fragments_queue.put(split_id, new_fragment) catch {
                 Logger.ERROR("Failed to put new fragment queue", .{});
+                frame_copy.deinit(allocator);
+                new_fragment.deinit();
                 return;
             };
         }
@@ -454,9 +501,14 @@ pub const Client = struct {
                 const serialized = try nic.serialize(allocator);
                 defer allocator.free(serialized);
 
-                const frame = Client.frameIn(serialized, allocator);
-                self.sendFrame(frame, .Immediate);
+                var frame = Client.frameIn(serialized, allocator);
+                self.sendFrame(&frame, .Immediate);
+                frame.deinit(allocator);
                 self.status = .Connected;
+
+                if (self.connection_callback) |callback| {
+                    callback(self, self.connection_callback_ctx);
+                }
             },
             Proto.Packets.DisconnectNotification => {
                 self.status = .Disconnected;
@@ -482,8 +534,9 @@ pub const Client = struct {
                 var pong = ConnectedPong.init(std.time.milliTimestamp(), ping.timestamp);
                 const ser = try pong.serialize(self.options.allocator);
                 defer self.options.allocator.free(ser);
-                const frame = Client.frameIn(ser, self.options.allocator);
-                self.sendFrame(frame, .Immediate);
+                var frame = Client.frameIn(ser, self.options.allocator);
+                self.sendFrame(&frame, .Immediate);
+                frame.deinit(allocator);
             },
             else => {
                 Logger.WARN("Unhandeled inner packet {d}", .{ID});
@@ -515,6 +568,7 @@ pub const Client = struct {
 
         var nack = try Proto.Ack.deserialize(payload, self.options.allocator);
         defer nack.deinit();
+
         for (nack.sequences) |seq| {
             const frames = self.comm_data.output_backup.get(@as(u24, @intCast(seq)));
             if (frames) |f| {
@@ -522,11 +576,19 @@ pub const Client = struct {
                     .sequence_number = @as(u24, @intCast(seq)),
                     .frames = f,
                 };
+                defer frameset.deinit(self.options.allocator);
                 const serialized = try frameset.serialize(self.options.allocator);
                 defer self.options.allocator.free(serialized);
                 try self.socket.sendTo(serialized, self.options.address, self.options.port);
             }
         }
+    }
+
+    pub fn sendReliableMessage(self: *Client, msg: []const u8, priority: Priority) void {
+        var frame = Client.frameIn(msg, self.options.allocator);
+        defer frame.deinit(self.options.allocator);
+        frame.reliability = Reliability.ReliableOrdered;
+        self.sendFrame(&frame, priority);
     }
 
     pub fn frameIn(msg: []const u8, allocator: std.mem.Allocator) Frame {
@@ -537,10 +599,10 @@ pub const Client = struct {
         return Frame.init(null, null, null, 0, Reliability.ReliableOrdered, payload_copy, null, null, null, allocator);
     }
 
-    pub fn sendFrame(self: *Client, frame: Frame, priority: Priority) void {
+    pub fn sendFrame(self: *Client, frame: *Frame, priority: Priority) void {
         const channel_index = frame.order_channel orelse 0;
         const channel = @as(usize, channel_index);
-        var mutable_frame = frame;
+        var mutable_frame = frame.*;
 
         if (mutable_frame.isSequenced()) {
             mutable_frame.ordered_frame_index = self.comm_data.output_order_index[channel];
@@ -560,21 +622,25 @@ pub const Client = struct {
                 self.comm_data.output_reliable_index += 1;
             }
             self.queueFrame(mutable_frame, priority);
+            frame.payload = &[_]u8{};
             return;
         } else {
-            const split_size = (payload_size + max_size - 1) / max_size;
-            self.handleLargePayload(&mutable_frame, max_size, split_size, priority);
+            const split_size: usize = (payload_size + max_size - 1) / max_size;
+            frame.payload = &[_]u8{};
+            defer mutable_frame.deinit(self.options.allocator);
+            self.handleLargePayload(mutable_frame, max_size, split_size, priority);
         }
     }
 
-    pub fn handleLargePayload(self: *Client, frame: *Frame, max_size: usize, split_size: usize, priority: Priority) void {
+    pub fn handleLargePayload(self: *Client, frame: Frame, max_size: usize, split_size: usize, priority: Priority) void {
         const allocator = self.options.allocator;
-        const split_id = self.comm_data.output_split_index;
+        const split_id = self.comm_data.output_split_index & 0xFFFF;
         self.comm_data.output_split_index = (self.comm_data.output_split_index +% 1);
 
-        var index: usize = 0;
-        while (index < frame.payload.len) {
-            const end_index = @min(index + max_size, frame.payload.len);
+        var i: usize = 0;
+        while (i < frame.payload.len) : (i += 1) {
+            const index = i * max_size;
+            const end_index = @min(i + max_size, frame.payload.len);
             const fragment_payload = frame.payload[index..end_index];
 
             const payload_copy = allocator.dupe(u8, fragment_payload) catch {
@@ -582,17 +648,29 @@ pub const Client = struct {
                 return;
             };
 
-            var new_frame = Frame.init(frame.reliable_frame_index, frame.sequence_frame_index, frame.ordered_frame_index, frame.order_channel, frame.reliability, payload_copy, @as(u32, @intCast(index / max_size)), split_id, @as(u32, @intCast(split_size)), allocator);
+            var new_frame = Frame.init(
+                frame.reliable_frame_index,
+                frame.sequence_frame_index,
+                frame.ordered_frame_index,
+                frame.order_channel,
+                frame.reliability,
+                payload_copy,
+                @as(u32, @intCast(index / max_size)),
+                split_id,
+                @as(u32, @intCast(split_size)),
+                allocator,
+            );
 
             if (index != 0 and new_frame.isReliable()) {
                 new_frame.reliable_frame_index = self.comm_data.output_reliable_index;
                 self.comm_data.output_reliable_index += 1;
-            } else if (index == 0 and new_frame.isReliable()) {
-                new_frame.reliable_frame_index = frame.reliable_frame_index;
             }
+            // else if (index == 0 and new_frame.isReliable()) {
+            // new_frame.reliable_frame_index = frame.reliable_frame_index;
+            // }
 
             self.queueFrame(new_frame, priority);
-            index += max_size;
+            // index += max_size;
         }
     }
 
