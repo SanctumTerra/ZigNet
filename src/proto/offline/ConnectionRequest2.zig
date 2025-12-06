@@ -21,7 +21,8 @@ pub const ConnectionRequest2 = struct {
 
         const mtu: i16 = @as(i16, @intCast(self.mtu_size));
         try Int16.write(&stream, mtu, .Big);
-        try Int64.write(&stream, mtu, .Big);
+
+        try Int64.write(&stream, self.guid, .Big);
 
         return try stream.getBufferOwned(allocator);
     }
@@ -35,7 +36,8 @@ pub const ConnectionRequest2 = struct {
         const address = try Address.read(&stream, allocator);
 
         const mtu = try Int16.read(&stream, .Big);
-        const mtu_size: i16 = @as(i16, mtu);
+        const mtu_size: u16 = @as(u16, @intCast(mtu));
+
         const guid = try Int64.read(&stream, .Big);
         return .{ .address = address, .mtu_size = mtu_size, .guid = guid };
     }
