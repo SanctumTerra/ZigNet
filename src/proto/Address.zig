@@ -139,7 +139,6 @@ pub const Address = struct {
 
     pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) !Address {
         const version = try stream.readUint8();
-
         return switch (version) {
             4 => {
                 var ipv4_bytes: [4]u8 = undefined;

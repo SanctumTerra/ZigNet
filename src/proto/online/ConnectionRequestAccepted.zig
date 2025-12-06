@@ -42,7 +42,7 @@ pub const ConnectionRequestAccepted = struct {
         defer allocator.free(internal_address_buffer);
 
         var i: u8 = 0;
-        while (i < 10) : (i += 1) {
+        while (i < 20) : (i += 1) {
             try stream.write(internal_address_buffer);
         }
 
@@ -69,32 +69,38 @@ pub const ConnectionRequestAccepted = struct {
 
         const system_idx = try stream.readUint16(.Big);
 
-        var system_addresses_array: [10]Address = undefined;
-        var first_system_address: Address = undefined;
+        // HACK: Some MCBE implementations send 10 addresses, some send 20.
+        // Calculate how many bytes remain for addresses by subtracting timestamp size (16 bytes)
+        const timestamps_size: usize = 16; // 2x i64
+        const remaining_for_addresses = data.len - stream.offset - timestamps_size;
 
-        // Read 10 system addresses
-        var i: u8 = 0;
-        while (i < 10) : (i += 1) {
-            system_addresses_array[i] = Address.read(&stream, allocator) catch |err| {
-                Logger.ERROR("Failed to deserialize system address index {any}: {any}", .{ i, err });
-                // Deallocate successfully deserialized addresses before this one
-                var k: u8 = 0;
-                while (k < i) : (k += 1) {
-                    system_addresses_array[k].deinit(allocator);
+        // Read addresses until we've consumed the expected bytes
+        var first_system_address: ?Address = null;
+        var address_count: usize = 0;
+        const addresses_start = stream.offset;
+
+        while (address_count < 20 and (stream.offset - addresses_start) < remaining_for_addresses) : (address_count += 1) {
+            const addr = Address.read(&stream, allocator) catch |err| {
+                // Real error - cleanup and return
+                if (first_system_address) |fsa| {
+                    fsa.deinit(allocator);
                 }
-                client_address.deinit(allocator); // also deallocate the client_address
+                client_address.deinit(allocator);
                 return err;
             };
-            if (i == 0) {
-                first_system_address = system_addresses_array[0];
+
+            if (address_count == 0) {
+                first_system_address = addr; // Keep the first address
+            } else {
+                addr.deinit(allocator); // Discard the rest
             }
         }
 
-        // Deallocate the 9 system addresses that are not returned
-        i = 1; // Start from the second address
-        while (i < 10) : (i += 1) {
-            system_addresses_array[i].deinit(allocator);
-        }
+        // If no addresses were read, create a dummy one
+        const system_address = first_system_address orelse blk: {
+            const dummy_str = try allocator.dupe(u8, "0.0.0.0");
+            break :blk Address.init(4, dummy_str, 0);
+        };
 
         const req_timestamp = try stream.readInt64(.Big);
         const server_timestamp = try stream.readInt64(.Big);
@@ -102,7 +108,7 @@ pub const ConnectionRequestAccepted = struct {
         return ConnectionRequestAccepted.init(
             client_address,
             system_idx,
-            first_system_address, // Only the first address is kept as per the original logic
+            system_address,
             req_timestamp,
             server_timestamp,
         );

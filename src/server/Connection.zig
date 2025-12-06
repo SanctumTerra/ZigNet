@@ -449,7 +449,6 @@ pub const Connection = struct {
     }
 
     pub fn handleSplitFrame(self: *Self, frame: Frame) !void {
-        Logger.INFO("Split frame received", .{});
         const split_id = frame.split_id orelse {
             Logger.ERROR("Split frame missing split_id", .{});
             return;

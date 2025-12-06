@@ -42,6 +42,8 @@ pub const Client = struct {
     disconnection_callback: ?DisconnectionCallback = null,
     disconnection_callback_ctx: ?*anyopaque = null,
 
+    connect_called: bool = false,
+
     pub fn init(options: ClientOptions) !Client {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(options.allocator);
         var i: u32 = 0;
@@ -80,6 +82,8 @@ pub const Client = struct {
         try self.socket.listen();
         self.socket.setCallback(Client._on, self);
         self.status = .Connecting;
+        self.connect_called = true;
+        self.last_receive = std.time.milliTimestamp();
 
         self.tick_thread = try std.Thread.spawn(.{}, tickLoop, .{self});
         var request = OpenConnectionRequest1.init(11, self.options.mtu_size);
@@ -334,7 +338,6 @@ pub const Client = struct {
     }
 
     pub fn handleSplitFrame(self: *Self, frame: Frame) !void {
-        Logger.INFO("Split frame received", .{});
         const split_id = frame.split_id orelse {
             Logger.ERROR("Split frame missing split_id", .{});
             return;
@@ -409,11 +412,7 @@ pub const Client = struct {
                     }
                 }
 
-                // Remove the fragment from the queue
-                var iter = fragment.iterator();
-                while (iter.next()) |entry| {
-                    entry.value_ptr.deinit(allocator);
-                }
+                // Remove the fragment from the queue (frames already freed above)
                 fragment.deinit();
                 _ = self.comm_data.fragments_queue.remove(split_id);
 
@@ -517,7 +516,7 @@ pub const Client = struct {
                 } else {
                     std.debug.print("Client disconnected by server\n", .{});
                 }
-                std.debug.print("Client disconnected by server\n", .{});
+                // std.debug.print("Client disconnected by server\n", .{});
             },
             254 => {
                 if (self.game_callback) |callback| {
@@ -527,11 +526,14 @@ pub const Client = struct {
                 }
 
                 // Game packet - could add callback here
-                std.debug.print("Received game packet (ID 254)\n", .{});
+                // std.debug.print("Received game packet (ID 254)\n", .{});
             },
             Packets.ConnectedPing => {
                 const ping = try ConnectedPing.deserialize(payload, self.options.allocator);
-                var pong = ConnectedPong.init(std.time.milliTimestamp(), ping.timestamp);
+                var pong = ConnectedPong.init(
+                    ping.timestamp,
+                    std.time.milliTimestamp(),
+                );
                 const ser = try pong.serialize(self.options.allocator);
                 defer self.options.allocator.free(ser);
                 var frame = Client.frameIn(ser, self.options.allocator);
@@ -549,6 +551,9 @@ pub const Client = struct {
 
         var ack = try Proto.Ack.deserialize(payload, self.options.allocator);
         defer ack.deinit();
+
+        self.comm_data.output_queue_mutex.lock();
+        defer self.comm_data.output_queue_mutex.unlock();
 
         for (ack.sequences) |seq| {
             if (self.comm_data.output_backup.contains(@as(u24, @intCast(seq)))) {
@@ -569,6 +574,9 @@ pub const Client = struct {
         var nack = try Proto.Ack.deserialize(payload, self.options.allocator);
         defer nack.deinit();
 
+        self.comm_data.output_queue_mutex.lock();
+        defer self.comm_data.output_queue_mutex.unlock();
+
         for (nack.sequences) |seq| {
             const frames = self.comm_data.output_backup.get(@as(u24, @intCast(seq)));
             if (frames) |f| {
@@ -576,10 +584,14 @@ pub const Client = struct {
                     .sequence_number = @as(u24, @intCast(seq)),
                     .frames = f,
                 };
-                defer frameset.deinit(self.options.allocator);
-                const serialized = try frameset.serialize(self.options.allocator);
+                const serialized = frameset.serialize(self.options.allocator) catch |err| {
+                    Logger.ERROR("Failed to serialize frameset in handleNack: {any}", .{err});
+                    continue;
+                };
                 defer self.options.allocator.free(serialized);
-                try self.socket.sendTo(serialized, self.options.address, self.options.port);
+                self.socket.sendTo(serialized, self.options.address, self.options.port) catch |err| {
+                    Logger.ERROR("Failed to send nack response: {any}", .{err});
+                };
             }
         }
     }
@@ -621,11 +633,19 @@ pub const Client = struct {
                 mutable_frame.reliable_frame_index = self.comm_data.output_reliable_index;
                 self.comm_data.output_reliable_index += 1;
             }
-            self.queueFrame(mutable_frame, priority);
+            // Clear original frame's payload BEFORE queueFrame, since queueFrame with
+            // Immediate priority may call sendQueue->cleanupOutputQueueFrames which frees
+            // the payload. This prevents double-free when caller calls frame.deinit().
             frame.payload = &[_]u8{};
+            self.queueFrame(mutable_frame, priority);
             return;
         } else {
             const split_size: usize = (payload_size + max_size - 1) / max_size;
+            // Assign reliable index for the first fragment before splitting
+            if (mutable_frame.isReliable()) {
+                mutable_frame.reliable_frame_index = self.comm_data.output_reliable_index;
+                self.comm_data.output_reliable_index += 1;
+            }
             frame.payload = &[_]u8{};
             defer mutable_frame.deinit(self.options.allocator);
             self.handleLargePayload(mutable_frame, max_size, split_size, priority);
@@ -637,10 +657,9 @@ pub const Client = struct {
         const split_id = self.comm_data.output_split_index & 0xFFFF;
         self.comm_data.output_split_index = (self.comm_data.output_split_index +% 1);
 
-        var i: usize = 0;
-        while (i < frame.payload.len) : (i += 1) {
-            const index = i * max_size;
-            const end_index = @min(i + max_size, frame.payload.len);
+        var index: usize = 0;
+        while (index < frame.payload.len) : (index += max_size) {
+            const end_index = @min(index + max_size, frame.payload.len);
             const fragment_payload = frame.payload[index..end_index];
 
             const payload_copy = allocator.dupe(u8, fragment_payload) catch {
@@ -661,34 +680,41 @@ pub const Client = struct {
                 allocator,
             );
 
-            if (index != 0 and new_frame.isReliable()) {
+            if (index != 0) {
                 new_frame.reliable_frame_index = self.comm_data.output_reliable_index;
                 self.comm_data.output_reliable_index += 1;
             }
-            // else if (index == 0 and new_frame.isReliable()) {
-            // new_frame.reliable_frame_index = frame.reliable_frame_index;
-            // }
 
             self.queueFrame(new_frame, priority);
-            // index += max_size;
         }
     }
 
     pub fn queueFrame(self: *Client, frame: Frame, priority: Priority) void {
+        self.comm_data.output_queue_mutex.lock();
+        defer self.comm_data.output_queue_mutex.unlock();
+
         self.comm_data.output_frame_queue.append(self.options.allocator, frame) catch {
             Logger.ERROR("Failed to queue frame", .{});
-            defer frame.deinit(self.options.allocator);
+            var mutable_frame = frame;
+            mutable_frame.deinit(self.options.allocator);
             return;
         };
 
         const should_send_immediately = priority == Priority.Immediate;
         const queue_len = self.comm_data.output_frame_queue.items.len;
         if (should_send_immediately) {
-            self.sendQueue(queue_len);
+            self.sendQueueLocked(queue_len);
         }
     }
 
     pub fn sendQueue(self: *Client, amount: usize) void {
+        self.comm_data.output_queue_mutex.lock();
+        defer self.comm_data.output_queue_mutex.unlock();
+        self.sendQueueLocked(amount);
+    }
+
+    // Internal version that assumes mutex is already held
+    fn sendQueueLocked(self: *Client, amount: usize) void {
         if (self.comm_data.output_frame_queue.items.len == 0) return;
         const allocator = self.options.allocator;
         const count = @min(amount, self.comm_data.output_frame_queue.items.len);
@@ -696,7 +722,7 @@ pub const Client = struct {
 
         const backup = allocator.alloc(Frame, count) catch |err| {
             Logger.ERROR("Backup alloc failed: {any}", .{err});
-            self.cleanupOutputQueueFrames(count);
+            self.cleanupOutputQueueFramesLocked(count);
             return;
         };
 
@@ -734,7 +760,7 @@ pub const Client = struct {
             allocator.free(backup);
         };
 
-        self.cleanupOutputQueueFrames(count);
+        self.cleanupOutputQueueFramesLocked(count);
         self.socket.sendTo(serialized, self.options.address, self.options.port) catch |err| {
             Logger.ERROR("Failed to send frameset: {any}", .{err});
         };
@@ -742,6 +768,13 @@ pub const Client = struct {
     }
 
     fn cleanupOutputQueueFrames(self: *Client, amount: usize) void {
+        self.comm_data.output_queue_mutex.lock();
+        defer self.comm_data.output_queue_mutex.unlock();
+        self.cleanupOutputQueueFramesLocked(amount);
+    }
+
+    // Internal version that assumes mutex is already held
+    fn cleanupOutputQueueFramesLocked(self: *Client, amount: usize) void {
         const queue = &self.comm_data.output_frame_queue;
         const to_remove = @min(amount, queue.items.len);
         if (to_remove == 0) return;
@@ -755,18 +788,24 @@ pub const Client = struct {
     }
 
     pub fn tick(self: *Client) void {
-        if (self.status == .Disconnected) return;
+        if (self.status == .Disconnected or !self.connect_called) return;
 
-        if (self.last_receive + 15000 < std.time.milliTimestamp()) {
-            Logger.WARN("Client has not received any packets in 15000ms", .{});
+        // Only check for timeout after connect() has been called
+        if (self.connect_called and self.last_receive + 15000 < std.time.milliTimestamp()) {
+            Logger.WARN("Client has not received any packets in 15000ms (15s)", .{});
             self.status = .Disconnected;
             return;
         }
 
         const allocator = self.options.allocator;
-        const queue_len = self.comm_data.output_frame_queue.items.len;
-        if (queue_len > 0) {
-            self.sendQueue(queue_len);
+        // Check queue length under lock to avoid race condition
+        {
+            self.comm_data.output_queue_mutex.lock();
+            const queue_len = self.comm_data.output_frame_queue.items.len;
+            if (queue_len > 0) {
+                self.sendQueueLocked(queue_len);
+            }
+            self.comm_data.output_queue_mutex.unlock();
         }
         if (self.comm_data.received_sequences.count() > 0) {
             var sequences_list = std.ArrayList(u32).initBuffer(&[_]u32{});
@@ -839,6 +878,7 @@ pub const CommData = struct {
     output_reliable_index: u32,
     output_sequence: u32,
     output_frame_queue: std.ArrayList(Frame),
+    output_queue_mutex: std.Thread.Mutex = .{},
     output_backup: std.AutoHashMap(u24, []Frame),
     output_order_index: [MAX_ACTIVE_FRAGMENTATIONS]u32,
     output_sequence_index: [MAX_ACTIVE_FRAGMENTATIONS]u32,

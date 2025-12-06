@@ -39,7 +39,7 @@ pub const NewIncomingConnection = struct {
         };
         defer allocator.free(internal_address_buffer);
 
-        for (0..20) |i| {
+        for (0..10) |i| {
             _ = i;
             try stream.write(internal_address_buffer);
         }
@@ -63,19 +63,47 @@ pub const NewIncomingConnection = struct {
         // Read client address
         const address = try Address.read(&stream, allocator);
 
-        // Read internal addresses (20 times, but we only need the first one)
-        const internal_address = try Address.read(&stream, allocator);
+        // HACK: Some MCBE implementations send 10 addresses, some send 20.
+        // Read addresses until we hit an invalid version (meaning we've hit timestamp bytes),
+        // then back up and read the timestamps.
+        var internal_address: ?Address = null;
+        var address_count: usize = 0;
+        var last_valid_pos: usize = stream.offset;
 
-        // Skip the remaining 19 internal addresses
-        for (1..20) |_| {
-            _ = try Address.read(&stream, allocator);
+        while (address_count < 20) : (address_count += 1) {
+            last_valid_pos = stream.offset;
+            const addr = Address.read(&stream, allocator) catch |err| {
+                if (err == error.InvalidAddressVersion) {
+                    // Hit invalid data, back up to last valid position
+                    stream.offset = last_valid_pos;
+                    break;
+                }
+                // Real error - cleanup and return
+                if (internal_address) |ia| {
+                    ia.deinit(allocator);
+                }
+                address.deinit(allocator);
+                return err;
+            };
+
+            // Keep only the last valid address
+            if (internal_address) |ia| {
+                ia.deinit(allocator);
+            }
+            internal_address = addr;
         }
+
+        // If no addresses were read, create a dummy one
+        const final_internal_address = internal_address orelse blk: {
+            const dummy_str = try allocator.dupe(u8, "0.0.0.0");
+            break :blk Address.init(4, dummy_str, 0);
+        };
 
         // Read timestamps
         const incoming_timestamp = try stream.readInt64(.Big);
         const server_timestamp = try stream.readInt64(.Big);
 
-        return NewIncomingConnection.init(address, internal_address, incoming_timestamp, server_timestamp);
+        return NewIncomingConnection.init(address, final_internal_address, incoming_timestamp, server_timestamp);
     }
 };
 
