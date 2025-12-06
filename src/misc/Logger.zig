@@ -60,7 +60,7 @@ pub const Logger = struct {
     }
 
     pub fn INFO(comptime fmt: []const u8, args: anytype) void {
-        const timestamp = std.time.timestamp();
+        const timestamp = @divFloor(std.time.milliTimestamp(), 1000);
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
 
         const daySeconds = localTime.getDaySeconds();
@@ -73,7 +73,7 @@ pub const Logger = struct {
     }
 
     pub fn ERROR(comptime fmt: []const u8, args: anytype) void {
-        const timestamp = std.time.timestamp();
+        const timestamp = @divFloor(std.time.milliTimestamp(), 1000);
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
 
         const daySeconds = localTime.getDaySeconds();
@@ -86,7 +86,7 @@ pub const Logger = struct {
     }
 
     pub fn WARN(comptime fmt: []const u8, args: anytype) void {
-        const timestamp = std.time.timestamp();
+        const timestamp = @divFloor(std.time.milliTimestamp(), 1000);
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
 
         const daySeconds = localTime.getDaySeconds();
@@ -99,7 +99,7 @@ pub const Logger = struct {
     }
 
     pub fn DEBUG(comptime fmt: []const u8, args: anytype) void {
-        const timestamp = std.time.timestamp();
+        const timestamp = @divFloor(std.time.milliTimestamp(), 1000);
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
 
         const daySeconds = localTime.getDaySeconds();
@@ -115,7 +115,7 @@ pub const Logger = struct {
     /// Returns a slice of the buffer containing the formatted time.
     /// No memory is allocated.
     pub fn writeTimeToBuffer(buffer: []u8) ![]const u8 {
-        const timestamp_s = std.time.timestamp();
+        const timestamp_s = @divFloor(std.time.milliTimestamp(), 1000);
         const timestamp_ns = std.time.nanoTimestamp();
 
         const seconds_in_day = @mod(timestamp_s, 86400);
@@ -139,7 +139,7 @@ pub const Logger = struct {
     /// Returns a slice of the buffer containing the formatted date.
     /// No memory is allocated.
     pub fn writeDateToBuffer(buffer: []u8) ![]const u8 {
-        const t = std.time.timestamp();
+        const t = @divFloor(std.time.milliTimestamp(), 1000);
         const d = @divFloor(t, 86400);
         var y: i32 = 1970;
         var r = d;

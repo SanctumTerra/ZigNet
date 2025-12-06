@@ -1,6 +1,5 @@
 const std = @import("std");
 const BinaryStream = @import("BinaryStream").BinaryStream;
-const net = std.net;
 
 pub const AddressError = error{
     InvalidAddressVersion,
@@ -17,33 +16,50 @@ pub const Address = struct {
     }
 
     pub fn initFromRawBuiltin(raw_addr: *const anyopaque, port: u16, family: u8, allocator: std.mem.Allocator) !Address {
-        const addr = switch (family) {
-            2, 4 => blk: { // AF_INET
+        var buf: [48]u8 = undefined;
+        var ip_str: []const u8 = undefined;
+        var version: u8 = undefined;
+
+        switch (family) {
+            2, 4 => { // AF_INET
                 const ipv4_bytes = @as(*const [4]u8, @ptrCast(raw_addr));
-                break :blk net.Address.initIp4(ipv4_bytes.*, port);
+                ip_str = std.fmt.bufPrint(&buf, "{d}.{d}.{d}.{d}", .{
+                    ipv4_bytes[0],
+                    ipv4_bytes[1],
+                    ipv4_bytes[2],
+                    ipv4_bytes[3],
+                }) catch return AddressError.InvalidAddress;
+                version = 4;
             },
-            6, 10 => blk: { // AF_INET6
+            6, 10 => { // AF_INET6
                 const ipv6_bytes = @as(*const [16]u8, @ptrCast(raw_addr));
-                break :blk net.Address.initIp6(ipv6_bytes.*, port, 0, 0);
+                // Format as IPv6 hex groups
+                ip_str = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}", .{
+                    ipv6_bytes[0],
+                    ipv6_bytes[1],
+                    ipv6_bytes[2],
+                    ipv6_bytes[3],
+                    ipv6_bytes[4],
+                    ipv6_bytes[5],
+                    ipv6_bytes[6],
+                    ipv6_bytes[7],
+                    ipv6_bytes[8],
+                    ipv6_bytes[9],
+                    ipv6_bytes[10],
+                    ipv6_bytes[11],
+                    ipv6_bytes[12],
+                    ipv6_bytes[13],
+                    ipv6_bytes[14],
+                    ipv6_bytes[15],
+                }) catch return AddressError.InvalidAddress;
+                version = 6;
             },
             else => {
                 std.log.err("Unsupported address family: {d}", .{family});
                 return AddressError.InvalidAddressVersion;
             },
-        };
+        }
 
-        var buf: [48]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&buf, "{s}", .{addr}) catch |err| {
-            std.log.err("Failed to format address: {s}", .{@errorName(err)});
-            return err;
-        };
-
-        const ip_str = if (std.mem.lastIndexOf(u8, formatted, ":")) |colon_idx|
-            formatted[0..colon_idx]
-        else
-            formatted;
-
-        const version: u8 = if (family == 2 or family == 4) 4 else 6;
         const owned_address = try allocator.dupe(u8, ip_str);
         return init(version, owned_address, port);
     }
@@ -64,15 +80,48 @@ pub const Address = struct {
     }
 
     fn parseIPv6(address: []const u8) ![16]u8 {
-        var result: [16]u8 = undefined;
+        var result: [16]u8 = [_]u8{0} ** 16;
 
         // Handle :: shorthand by finding it and expanding
         const double_colon_pos = std.mem.indexOf(u8, address, "::");
 
-        if (double_colon_pos != null) {
-            // For simplicity, let's use std.net to parse IPv6
-            const parsed = std.net.Address.parseIp6(address, 0) catch return AddressError.InvalidAddress;
-            return parsed.in6.sa.addr;
+        if (double_colon_pos) |dc_pos| {
+            // Split into before and after ::
+            const before = address[0..dc_pos];
+            const after = if (dc_pos + 2 < address.len) address[dc_pos + 2 ..] else "";
+
+            // Count parts before ::
+            var before_count: usize = 0;
+            if (before.len > 0) {
+                var before_parts = std.mem.splitAny(u8, before, ":");
+                while (before_parts.next()) |part| {
+                    if (part.len == 0) continue;
+                    const value = std.fmt.parseInt(u16, part, 16) catch return AddressError.InvalidAddress;
+                    std.mem.writeInt(u16, result[before_count * 2 ..][0..2], value, .big);
+                    before_count += 1;
+                }
+            }
+
+            // Count parts after ::
+            var after_count: usize = 0;
+            var after_values: [8]u16 = undefined;
+            if (after.len > 0) {
+                var after_parts = std.mem.splitAny(u8, after, ":");
+                while (after_parts.next()) |part| {
+                    if (part.len == 0) continue;
+                    const value = std.fmt.parseInt(u16, part, 16) catch return AddressError.InvalidAddress;
+                    after_values[after_count] = value;
+                    after_count += 1;
+                }
+            }
+
+            // Write after values at the end
+            const after_start = 8 - after_count;
+            for (0..after_count) |i| {
+                std.mem.writeInt(u16, result[(after_start + i) * 2 ..][0..2], after_values[i], .big);
+            }
+
+            return result;
         } else {
             // Parse full IPv6 address
             var parts = std.mem.splitAny(u8, address, ":");
