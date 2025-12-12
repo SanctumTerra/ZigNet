@@ -213,31 +213,36 @@ pub const Client = struct {
         self.last_receive = std.time.milliTimestamp();
 
         const frameSet = try Proto.FrameSet.deserialize(buffer, self.options.allocator);
+        defer frameSet.deinit(self.options.allocator);
+
         const sequence = frameSet.sequence_number;
 
-        const is_duplicate = (self.comm_data.last_input_sequence != -1 and sequence <= @as(u24, @intCast(@max(0, self.comm_data.last_input_sequence)))) or self.comm_data.received_sequences.contains(sequence);
-        if (is_duplicate) {
-            defer frameSet.deinit(self.options.allocator);
-            return;
+        {
+            self.comm_data.input_mutex.lock();
+            defer self.comm_data.input_mutex.unlock();
+
+            const is_duplicate = (self.comm_data.last_input_sequence != -1 and sequence <= @as(u24, @intCast(@max(0, self.comm_data.last_input_sequence)))) or self.comm_data.received_sequences.contains(sequence);
+            if (is_duplicate) {
+                return;
+            }
+
+            self.comm_data.received_sequences.put(sequence, {}) catch {
+                return;
+            };
+            _ = self.comm_data.lost_sequences.remove(sequence);
+            const last_seq = @as(u24, @intCast(@max(0, self.comm_data.last_input_sequence)));
+            if (sequence > last_seq + 1) {
+                var i: u24 = last_seq + 1;
+                while (i < sequence) : (i += 1) {
+                    self.comm_data.lost_sequences.put(i, {}) catch continue;
+                }
+            }
+            self.comm_data.last_input_sequence = @as(i32, @intCast(sequence));
         }
 
-        self.comm_data.received_sequences.put(sequence, {}) catch {
-            return;
-        };
-        _ = self.comm_data.lost_sequences.remove(sequence);
-        const last_seq = @as(u24, @intCast(@max(0, self.comm_data.last_input_sequence)));
-        if (sequence > last_seq + 1) {
-            var i: u24 = last_seq + 1;
-            while (i < sequence) : (i += 1) {
-                self.comm_data.lost_sequences.put(i, {}) catch continue;
-            }
-        }
-        self.comm_data.last_input_sequence = @as(i32, @intCast(sequence));
         for (frameSet.frames) |frame| {
             try self.handleFrame(frame);
         }
-
-        defer frameSet.deinit(self.options.allocator);
     }
 
     pub fn handleFrame(self: *Client, frame: Frame) !void {
@@ -807,6 +812,10 @@ pub const Client = struct {
             }
             self.comm_data.output_queue_mutex.unlock();
         }
+
+        self.comm_data.input_mutex.lock();
+        defer self.comm_data.input_mutex.unlock();
+
         if (self.comm_data.received_sequences.count() > 0) {
             var sequences_list = std.ArrayList(u32).initBuffer(&[_]u32{});
             defer sequences_list.deinit(allocator);
@@ -871,6 +880,7 @@ pub const CommData = struct {
     last_input_sequence: i32 = -1,
     received_sequences: std.AutoHashMap(u24, void),
     lost_sequences: std.AutoHashMap(u24, void),
+    input_mutex: std.Thread.Mutex = .{},
     input_order_index: [MAX_ACTIVE_FRAGMENTATIONS]u32,
     input_highest_sequence_index: [MAX_ACTIVE_FRAGMENTATIONS]u32,
     input_ordering_queue: std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)),
