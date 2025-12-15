@@ -39,9 +39,9 @@ const Config = struct {
     // Sleep times for different states
     const BASE_SLEEP_NS = 10_000; // 0.01ms - responsive
     const IDLE_SLEEP_NS = 500_000; // 0.5ms - light idle
-    const MAX_IDLE_SLEEP_NS = 2_000_000; // 2ms - max idle (was 5ms)
-    const IDLE_THRESHOLD = 20; // more patience before ramping (was 10)
-    const DEEP_IDLE_THRESHOLD = 200; // more patience for deep idle (was 100)
+    const MAX_IDLE_SLEEP_NS = 2_000_000; // 2ms - max idle
+    const IDLE_THRESHOLD = 20;
+    const DEEP_IDLE_THRESHOLD = 200;
     const MAX_CONSECUTIVE_ERRORS = 15;
     const SOCKET_RECV_TIMEOUT_MS = 10;
 };
