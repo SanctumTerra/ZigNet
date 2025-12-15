@@ -1,7 +1,7 @@
 .{
     .name = .ZigNet,
     .version = "0.0.0",
-    .fingerprint = 0x1be2dab92242d60b, // Changing this has security and trust implications.
+    .fingerprint = 0x1be2dab92242d60b,
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .BinaryStream = .{
