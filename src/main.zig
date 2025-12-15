@@ -30,6 +30,7 @@ pub fn main() !void {
     var client = try Client.init(.{
         .allocator = allocator,
     });
+    connect_start_time = std.time.milliTimestamp();
     try client.connect();
 
     client.setConnectionCallback(
@@ -61,9 +62,12 @@ pub fn main() !void {
     }
 }
 
+var connect_start_time: i64 = 0;
+
 fn onConnect(connection: *Client, context: ?*anyopaque) void {
     _ = context;
-    Logger.INFO("Connection connected", .{});
+    const elapsed = std.time.milliTimestamp() - connect_start_time;
+    Logger.INFO("Connection connected in {d}ms", .{elapsed});
     connection.setGamePacketCallback(onGamePacket, null);
 }
 

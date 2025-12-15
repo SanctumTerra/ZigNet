@@ -270,9 +270,10 @@ pub const Connection = struct {
                     .frames = f,
                     .sequence_number = @as(u24, @intCast(seq)),
                 };
-                const serialized = try frameset.serialize(self.server.options.allocator);
-                defer self.server.options.allocator.free(serialized);
-                self.send(serialized);
+                var stream = Proto.BinaryStream.init(self.server.options.allocator, null, null);
+                defer stream.deinit();
+                try frameset.serialize(&stream);
+                self.send(stream.payload.items);
             }
         }
 
@@ -289,14 +290,18 @@ pub const Connection = struct {
         self.last_receive = std.time.milliTimestamp();
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
-        const frameSet = try Proto.FrameSet.deserialize(buffer, self.server.options.allocator);
+        var stream = Proto.BinaryStream.init(self.server.options.allocator, buffer, null);
+        defer stream.deinit(); // Frames borrow from stream, so deinit after handling
+
+        const frameSet = try Proto.FrameSet.deserialize(&stream, self.server.options.allocator);
+        defer frameSet.deinit(self.server.options.allocator);
+
         const sequence = frameSet.sequence_number;
         // Logger.DEBUG("Frameset {d}", .{frameSet.sequence_number});
 
         const is_duplicate = (self.comm_data.last_input_sequence != -1 and sequence <= @as(u24, @intCast(@max(0, self.comm_data.last_input_sequence)))) or self.comm_data.received_sequences.contains(sequence);
         // Logger.DEBUG("Frameset Duplicate? {}", .{is_duplicate});
         if (is_duplicate) {
-            defer frameSet.deinit(self.server.options.allocator);
             return;
         }
 
@@ -316,7 +321,6 @@ pub const Connection = struct {
             try self.handleFrame(frame);
         }
 
-        defer frameSet.deinit(self.server.options.allocator);
         if (PERFORM_TIME_CHECKS) {
             const end_time = std.time.milliTimestamp();
             const elapsed = end_time - start_time;
@@ -330,7 +334,6 @@ pub const Connection = struct {
 
         if (frame.payload.len == 0) {
             Logger.WARN("Frame has empty payload - skipping in handleFrame", .{});
-            frame.deinit(self.server.options.allocator);
             return;
         }
 
@@ -707,7 +710,9 @@ pub const Connection = struct {
         self.comm_data.output_sequence += 1;
 
         var frameset = Proto.FrameSet{ .sequence_number = sequence, .frames = backup };
-        const serialized = frameset.serialize(allocator) catch |err| {
+        var stream = Proto.BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        frameset.serialize(&stream) catch |err| {
             Logger.ERROR("Failed to serialize frameset: {any}", .{err});
             return;
         };
@@ -731,8 +736,7 @@ pub const Connection = struct {
         };
 
         self.cleanupOutputQueueFrames(count);
-        self.send(serialized);
-        defer allocator.free(serialized);
+        self.send(stream.payload.items);
 
         if (PERFORM_TIME_CHECKS) {
             const end_time = std.time.milliTimestamp();

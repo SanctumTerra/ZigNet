@@ -37,11 +37,11 @@ const Config = struct {
     const BUFFER_SIZE = 8192;
     const MAX_PACKETS_PER_BATCH = 128;
     // Sleep times for different states
-    const BASE_SLEEP_NS = 10_000;
-    const IDLE_SLEEP_NS = 1_000_000;
-    const MAX_IDLE_SLEEP_NS = 5_000_000;
-    const IDLE_THRESHOLD = 10;
-    const DEEP_IDLE_THRESHOLD = 100;
+    const BASE_SLEEP_NS = 10_000; // 0.01ms - responsive
+    const IDLE_SLEEP_NS = 500_000; // 0.5ms - light idle
+    const MAX_IDLE_SLEEP_NS = 2_000_000; // 2ms - max idle (was 5ms)
+    const IDLE_THRESHOLD = 20; // more patience before ramping (was 10)
+    const DEEP_IDLE_THRESHOLD = 200; // more patience for deep idle (was 100)
     const MAX_CONSECUTIVE_ERRORS = 15;
     const SOCKET_RECV_TIMEOUT_MS = 10;
 };
@@ -369,11 +369,11 @@ pub const Socket = struct {
                         // Gradually increase sleep time as we detect inactivity
                         if (consecutive_no_data > Config.DEEP_IDLE_THRESHOLD) {
                             // Cap the maximum sleep time to avoid becoming too unresponsive
-                            current_sleep_ns = @min(Config.MAX_IDLE_SLEEP_NS, current_sleep_ns + (current_sleep_ns / 4) // Increase by 25%
+                            current_sleep_ns = @min(Config.MAX_IDLE_SLEEP_NS, current_sleep_ns + (current_sleep_ns / 8) // Increase by 12.5% (was 25%)
                             );
                         } else if (consecutive_no_data > Config.IDLE_THRESHOLD) {
                             // Medium idle - slowly increase sleep time
-                            current_sleep_ns = @min(Config.IDLE_SLEEP_NS, current_sleep_ns + 10_000 // Increase by 0.01ms
+                            current_sleep_ns = @min(Config.IDLE_SLEEP_NS, current_sleep_ns + 5_000 // Increase by 0.005ms (was 0.01ms)
                             );
                         }
                         break; // No more data available
@@ -629,15 +629,3 @@ pub const Socket = struct {
         return self.is_listening.load(.acquire);
     }
 };
-
-// Example callback function
-// fn exampleCallback(
-//     data: []u8,
-//     from_addr: std.net.Address,
-//     context: ?*anyopaque,
-//     allocator: Allocator,
-// ) void {
-//     defer allocator.free(data); // Important: free the data when done
-//     _ = context;
-//     std.log.info("Received {} bytes from {}: {s}", .{ data.len, from_addr, data });
-// }
