@@ -16,7 +16,7 @@ pub const ConnectionRequest1 = struct {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
-        try VarInt.write(&stream, Packets.OpenConnectionRequest1);
+        try Int8.write(&stream, Packets.OpenConnectionRequest1);
         try Magic.write(&stream);
         try stream.writeUint8(@as(u8, @intCast(self.protocol)));
         const current_size = @as(u16, @intCast(stream.payload.items.len));
@@ -31,7 +31,7 @@ pub const ConnectionRequest1 = struct {
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectionRequest1 {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
-        _ = try VarInt.read(&stream);
+        _ = try Int8.read(&stream);
         try Magic.read(&stream);
         const protocol = try stream.readUint8();
         var mtu_size = @as(u16, @intCast(stream.payload.items.len));
@@ -63,7 +63,7 @@ test "ConnectionRequest1" {
 const std = @import("std");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Magic = @import("../Magic.zig").Magic;
-const VarInt = @import("BinaryStream").VarInt;
+const Int8 = @import("BinaryStream").Int8;
 const Packets = @import("../Packets.zig").Packets;
 const Server = @import("../../server/Server.zig");
 const Logger = @import("../../misc/Logger.zig").Logger;

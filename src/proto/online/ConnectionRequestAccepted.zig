@@ -25,7 +25,7 @@ pub const ConnectionRequestAccepted = struct {
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
 
-        try VarInt.write(&stream, Packets.ConnectionRequestAccepted);
+        try stream.writeUint8(Packets.ConnectionRequestAccepted);
 
         const address_buffer = self.address.write(allocator) catch |err| {
             Logger.ERROR("Failed to serialize client address: {any}", .{err});
@@ -60,7 +60,7 @@ pub const ConnectionRequestAccepted = struct {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
 
-        _ = try VarInt.read(&stream); // Skip Packet ID
+        _ = try stream.readUint8(); // Skip Packet ID
 
         const client_address = Address.read(&stream, allocator) catch |err| {
             Logger.ERROR("Failed to deserialize client address: {any}", .{err});
