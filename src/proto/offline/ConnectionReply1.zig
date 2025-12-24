@@ -49,7 +49,6 @@ pub const ConnectionReply1 = struct {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
         _ = try stream.readUint8(); // packet ID
-        _ = try stream.readUint8();
         try Magic.read(&stream);
         const guid = try stream.readInt64(.Big);
         const hasSecurity = try stream.readBool();

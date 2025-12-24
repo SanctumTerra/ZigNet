@@ -50,7 +50,6 @@ pub const ConnectionRequest2 = struct {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
         _ = try stream.readUint8(); // packet ID
-        _ = try stream.readUint8();
         try Magic.read(&stream);
         const address = try Address.read(&stream, allocator);
 
