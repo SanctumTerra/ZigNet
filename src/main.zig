@@ -9,6 +9,7 @@ const Client = @import("Raknet").Client;
 
 /// This is a test file or an example of  usage
 pub fn main() !void {
+    Logger.INFO("Running ZigNet", .{});
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     // var server = try Server.init(.{
@@ -29,6 +30,7 @@ pub fn main() !void {
 
     var client = try Client.init(.{
         .allocator = allocator,
+        .address = "51.178.216.177",
     });
     try client.connect();
 

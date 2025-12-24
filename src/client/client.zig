@@ -16,6 +16,8 @@ const NewIncomingConnection = @import("../proto/online/NewIncomingConnection.zig
 const ConnectionRequestAccepted = @import("../proto/online/ConnectionRequestAccepted.zig").ConnectionRequestAccepted;
 const ConnectedPing = @import("../proto/online/ConnectedPing.zig").ConnectedPing;
 const ConnectedPong = @import("../proto/online/ConnectedPong.zig").ConnectedPong;
+const OpenConnectionReply1 = @import("../proto/offline/ConnectionReply1.zig").ConnectionReply1;
+const ConnectionReply1Module = @import("../proto/offline/ConnectionReply1.zig");
 
 const MAX_ACTIVE_FRAGMENTATIONS = 128;
 const MAX_ORDERING_QUEUE_SIZE = 128;
@@ -43,6 +45,11 @@ pub const Client = struct {
     disconnection_callback_ctx: ?*anyopaque = null,
 
     connect_called: bool = false,
+
+    // Security fields from OpenConnectionReply1
+    server_has_security: bool = false,
+    security_cookie: ?u32 = null,
+    server_public_key: ?[294]u8 = null,
 
     pub fn init(options: ClientOptions) !Client {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(options.allocator);
@@ -133,17 +140,28 @@ pub const Client = struct {
 
         switch (ID) {
             Packets.OpenConnectionReply1 => {
-                // self.status = .Disconnected;
+                const packet = try OpenConnectionReply1.deserialize(payload, allocator);
+
+                // Store security info from the server
+                self.server_has_security = packet.hasSecurity;
+                self.security_cookie = packet.cookie;
+                self.server_public_key = packet.server_public_key;
+
                 const address = Address.init(4, self.options.address, self.options.port);
 
-                var r2 = OpenConnectionRequest2.init(address, self.options.mtu_size, self.options.guid);
+                // Use the server's mtu_size (from Reply1), not the client's requested size
+                const mtu_to_use = packet.mtu_size;
+
+                // If server has security with cookie, send it back with client_supports_security=false
+                var r2 = if (packet.hasSecurity and packet.cookie != null)
+                    OpenConnectionRequest2.initWithSecurity(address, mtu_to_use, self.options.guid, packet.cookie.?, false)
+                else
+                    OpenConnectionRequest2.init(address, mtu_to_use, self.options.guid);
 
                 const ser = try r2.serialize(allocator);
                 defer allocator.free(ser);
 
                 try self.send(ser);
-                // defer address.deinit(allocator);
-                // std.debug.print("Client sent OpenConnectionRequest2 to {s}:{d}\n", .{ self.options.address, self.options.port });
             },
             Packets.OpenConnectionReply2 => {
                 const reply = try ConnectionReply2.deserialize(payload, allocator);
