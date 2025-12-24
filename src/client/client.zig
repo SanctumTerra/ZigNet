@@ -137,7 +137,6 @@ pub const Client = struct {
         if (ID & 0xF0 == 0x80) ID = 0x80;
 
         self.last_receive = std.time.milliTimestamp();
-        Logger.INFO("Received Packet {d}", .{ID});
         switch (ID) {
             Packets.OpenConnectionReply1 => {
                 const packet = try OpenConnectionReply1.deserialize(payload, allocator);
