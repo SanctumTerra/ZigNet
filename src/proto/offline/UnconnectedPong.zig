@@ -26,7 +26,7 @@ pub const UnconnectedPong = struct {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
-        try VarInt.write(&stream, Packets.UnconnectedPong);
+        try stream.writeUint8(Packets.UnconnectedPong);
         try stream.writeInt64(self.timestamp, .Big);
         try stream.writeInt64(self.guid, .Big);
         try Magic.write(&stream);
@@ -38,7 +38,7 @@ pub const UnconnectedPong = struct {
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !UnconnectedPong {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
-        _ = try VarInt.read(&stream);
+        _ = try stream.readUint8();
         const timestamp = try stream.readInt64(.Big);
         const guid = try stream.readInt64(.Big);
         try Magic.read(&stream);

@@ -32,11 +32,13 @@ pub const Frame = struct {
     }
 
     pub fn deinit(self: *const Frame, allocator: std.mem.Allocator) void {
+        // Only free if frame owns its payload (allocator was set during init)
+        if (self.allocator == null) return;
         if (self.payload.len == 0) return;
         allocator.free(self.payload);
     }
 
-    pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) !Frame {
+    pub fn read(stream: *BinaryStream) !Frame {
         const flags = try stream.readUint8();
         const reliability: Reliability = @as(Reliability, @enumFromInt((flags & 224) >> 5));
         const length = try stream.readUint16(.Big);
@@ -84,10 +86,10 @@ pub const Frame = struct {
             split_frame_index = try stream.readUint32(.Big);
         }
 
-        const temp_payload = stream.read(payload_length);
+        const payload = stream.read(payload_length);
 
-        const owned_payload = allocator.dupe(u8, temp_payload) catch @panic("Failed to duplicate payload");
-        return Frame.init(reliable_frame_index, sequence_frame_index, ordered_frame_index, order_channel, reliability, owned_payload, split_frame_index, split_id, split_size, allocator);
+        // Payload borrows from stream - no copy, no allocator needed
+        return Frame.init(reliable_frame_index, sequence_frame_index, ordered_frame_index, order_channel, reliability, payload, split_frame_index, split_id, split_size, null);
     }
 
     pub fn write(self: *const Frame, stream: *BinaryStream) !void {

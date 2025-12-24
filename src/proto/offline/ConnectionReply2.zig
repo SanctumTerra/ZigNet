@@ -17,7 +17,7 @@ pub const ConnectionReply2 = struct {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
-        try VarInt.write(&stream, Packets.OpenConnectionReply2);
+        try stream.writeUint8(Packets.OpenConnectionReply2);
         try Magic.write(&stream);
         try stream.writeInt64(self.guid, .Big);
         const address_buffer = try self.address.write(allocator);
@@ -31,7 +31,7 @@ pub const ConnectionReply2 = struct {
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectionReply2 {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
-        _ = try VarInt.read(&stream);
+        _ = try stream.readUint8();
         try Magic.read(&stream);
         const guid = try stream.readInt64(.Big);
         const address = try Address.read(&stream, allocator);

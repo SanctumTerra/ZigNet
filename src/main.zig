@@ -32,6 +32,7 @@ pub fn main() !void {
         .allocator = allocator,
         .address = "51.178.216.177",
     });
+    connect_start_time = std.time.milliTimestamp();
     try client.connect();
 
     client.setConnectionCallback(
@@ -63,9 +64,12 @@ pub fn main() !void {
     }
 }
 
+var connect_start_time: i64 = 0;
+
 fn onConnect(connection: *Client, context: ?*anyopaque) void {
     _ = context;
-    Logger.INFO("Connection connected", .{});
+    const elapsed = std.time.milliTimestamp() - connect_start_time;
+    Logger.INFO("Connection connected in {d}ms", .{elapsed});
     connection.setGamePacketCallback(onGamePacket, null);
 }
 

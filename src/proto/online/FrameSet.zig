@@ -8,35 +8,25 @@ pub const FrameSet = struct {
     sequence_number: u24,
     frames: []const Frame,
 
-    pub fn serialize(self: *const FrameSet, allocator: std.mem.Allocator) ![]u8 {
-        var stream = BinaryStream.init(allocator, null, null);
-        defer stream.deinit();
-
+    pub fn serialize(self: *const FrameSet, stream: *BinaryStream) !void {
         try stream.writeUint8(Packets.FrameSet);
         try stream.writeUint24(self.sequence_number, .Little);
 
         for (self.frames) |frame| {
-            try frame.write(&stream);
+            try frame.write(stream);
         }
-
-        return stream.getBufferOwned(allocator);
     }
 
-    pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !FrameSet {
-        var stream = BinaryStream.init(allocator, data, null);
-        defer stream.deinit();
-
+    pub fn deserialize(stream: *BinaryStream, allocator: std.mem.Allocator) !FrameSet {
         _ = try stream.readUint8(); // Skip packet type
         const sequence_number = try stream.readUint24(.Little);
 
-        var frames = std.ArrayList(Frame).initBuffer(&[_]Frame{}); // Start with an empty buffer
-        errdefer {
-            for (frames.items) |frame| frame.deinit(allocator);
-            frames.deinit(allocator);
-        }
+        var frames = std.ArrayList(Frame).initBuffer(&[_]Frame{});
+        errdefer frames.deinit(allocator);
+
         const end_position = stream.payload.items.len;
         while (stream.offset < end_position) {
-            const frame = try Frame.read(&stream, allocator);
+            const frame = try Frame.read(stream);
             try frames.append(allocator, frame);
         }
 
@@ -47,9 +37,7 @@ pub const FrameSet = struct {
     }
 
     pub fn deinit(self: FrameSet, allocator: std.mem.Allocator) void {
-        for (self.frames) |frame| {
-            frame.deinit(allocator);
-        }
+        // Frames don't own their payloads (they borrow from stream), just free the slice
         allocator.free(self.frames);
     }
 };
@@ -78,10 +66,14 @@ test "FrameSet" {
         .frames = &frames,
     };
 
-    const serialized = try frameset.serialize(allocator);
-    defer allocator.free(serialized);
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
 
-    var deserialized = try FrameSet.deserialize(serialized, allocator);
+    try frameset.serialize(&stream);
+
+    // Reset stream offset for reading
+    stream.offset = 0;
+    var deserialized = try FrameSet.deserialize(&stream, allocator);
     defer deserialized.deinit(allocator);
 
     try std.testing.expectEqual(frameset.sequence_number, deserialized.sequence_number);

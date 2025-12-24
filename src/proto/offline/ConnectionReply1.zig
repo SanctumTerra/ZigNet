@@ -48,7 +48,11 @@ pub const ConnectionReply1 = struct {
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectionReply1 {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
+<<<<<<< HEAD
         _ = try stream.readUint8(); // packet ID
+=======
+        _ = try stream.readUint8();
+>>>>>>> 999b32431d1aef5e74efbcee2789801dbb6104c8
         try Magic.read(&stream);
         const guid = try stream.readInt64(.Big);
         const hasSecurity = try stream.readBool();

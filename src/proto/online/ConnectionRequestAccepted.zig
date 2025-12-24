@@ -25,7 +25,7 @@ pub const ConnectionRequestAccepted = struct {
         var stream = BinaryStream.init(allocator, buffer, 0);
         defer stream.deinit();
 
-        try VarInt.write(&stream, Packets.ConnectionRequestAccepted);
+        try stream.writeUint8(Packets.ConnectionRequestAccepted);
 
         const address_buffer = self.address.write(allocator) catch |err| {
             Logger.ERROR("Failed to serialize client address: {any}", .{err});
@@ -60,7 +60,7 @@ pub const ConnectionRequestAccepted = struct {
         var stream = BinaryStream.init(allocator, data, 0);
         defer stream.deinit();
 
-        _ = try VarInt.read(&stream); // Skip Packet ID
+        _ = try stream.readUint8(); // Skip Packet ID
 
         const client_address = Address.read(&stream, allocator) catch |err| {
             Logger.ERROR("Failed to deserialize client address: {any}", .{err});
@@ -74,26 +74,18 @@ pub const ConnectionRequestAccepted = struct {
         const timestamps_size: usize = 16; // 2x i64
         const remaining_for_addresses = data.len - stream.offset - timestamps_size;
 
-        // Read addresses until we've consumed the expected bytes
+        // Read first address, skip the rest without allocating
         var first_system_address: ?Address = null;
-        var address_count: usize = 0;
         const addresses_start = stream.offset;
 
-        while (address_count < 20 and (stream.offset - addresses_start) < remaining_for_addresses) : (address_count += 1) {
-            const addr = Address.read(&stream, allocator) catch |err| {
-                // Real error - cleanup and return
-                if (first_system_address) |fsa| {
-                    fsa.deinit(allocator);
-                }
+        if (remaining_for_addresses > 0) {
+            first_system_address = Address.read(&stream, allocator) catch |err| {
                 client_address.deinit(allocator);
                 return err;
             };
 
-            if (address_count == 0) {
-                first_system_address = addr; // Keep the first address
-            } else {
-                addr.deinit(allocator); // Discard the rest
-            }
+            // Skip remaining addresses by jumping to timestamps
+            stream.offset = addresses_start + remaining_for_addresses;
         }
 
         // If no addresses were read, create a dummy one
