@@ -51,6 +51,10 @@ pub const Client = struct {
     security_cookie: ?u32 = null,
     server_public_key: ?[294]u8 = null,
 
+    // Flags to prevent duplicate offline packet processing
+    received_reply1: bool = false,
+    received_reply2: bool = false,
+
     pub fn init(options: ClientOptions) !Client {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(options.allocator);
         var i: u32 = 0;
@@ -139,6 +143,10 @@ pub const Client = struct {
         self.last_receive = std.time.milliTimestamp();
         switch (ID) {
             Packets.OpenConnectionReply1 => {
+                // Only process if we haven't received Reply1 yet
+                if (self.received_reply1) return;
+                self.received_reply1 = true;
+
                 const packet = try OpenConnectionReply1.deserialize(payload, allocator);
 
                 // Store security info from the server
@@ -163,6 +171,10 @@ pub const Client = struct {
                 try self.send(ser);
             },
             Packets.OpenConnectionReply2 => {
+                // Only process if we haven't received Reply2 yet
+                if (self.received_reply2) return;
+                self.received_reply2 = true;
+
                 const reply = try ConnectionReply2.deserialize(payload, allocator);
                 defer {
                     reply.address.deinit(allocator);
