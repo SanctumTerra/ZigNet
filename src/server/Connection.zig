@@ -575,6 +575,12 @@ pub const Connection = struct {
         return Frame.init(null, null, null, 0, Reliability.ReliableOrdered, payload_copy, null, null, null, allocator);
     }
 
+    pub fn sendReliableMessage(self: *Connection, msg: []const u8, priority: Priority) void {
+        var frame = frameIn(msg, self.server.options.allocator);
+        frame.reliability = Reliability.ReliableOrdered;
+        self.sendFrame(frame, priority);
+    }
+
     pub fn sendFrame(self: *Connection, frame: Frame, priority: Priority) void {
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
