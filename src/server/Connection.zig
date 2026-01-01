@@ -22,6 +22,7 @@ pub const Connection = struct {
     active: bool,
     comm_data: CommData,
     last_receive: i64,
+    created_at: i64,
     game_packet_callback: ?GamePacketCallback,
     game_packet_context: ?*anyopaque,
     tickCounter: u64 = 0,
@@ -57,6 +58,7 @@ pub const Connection = struct {
                 .fragments_queue = std.AutoHashMap(u16, std.AutoHashMap(u16, Frame)).init(server.options.allocator),
             },
             .last_receive = std.time.milliTimestamp(),
+            .created_at = std.time.milliTimestamp(),
             .game_packet_callback = null,
             .game_packet_context = null,
         };
@@ -87,6 +89,8 @@ pub const Connection = struct {
             },
             Proto.Packets.NewIncomingConnection => {
                 self.connected = true;
+                const elapsed = std.time.milliTimestamp() - self.created_at;
+                Logger.DEBUG("Connection established in {d}ms", .{elapsed});
                 // Trigger server connect callback
                 if (self.server.connect_callback) |callback| {
                     callback(self, self.server.connect_context);

@@ -19,13 +19,38 @@ pub const Server = struct {
     options: ServerOptions,
     socket: Socket,
     running: bool = false,
-    connections: std.StringHashMap(Connection),
+    connections: std.AutoHashMap(i64, Connection),
     connections_mutex: Mutex, // Add mutex for connections HashMap
     tick_thread: ?Thread,
     connect_callback: ?ConnectCallback,
     connect_context: ?*anyopaque,
     disconnect_callback: ?DisconnectCallback,
     disconnect_context: ?*anyopaque,
+
+    /// Fast hash for address -> i64 key (no allocation)
+    /// IPv4: packs ip (4 bytes) + port (2 bytes) into lower 48 bits
+    /// IPv6: uses FNV-1a hash of the 16-byte address + port
+    pub inline fn addressToKey(address: std.net.Address) i64 {
+        return switch (address.any.family) {
+            std.posix.AF.INET => blk: {
+                const ip = address.in.sa.addr;
+                const port = address.in.sa.port;
+                break :blk @as(i64, ip) | (@as(i64, port) << 32);
+            },
+            std.posix.AF.INET6 => blk: {
+                // FNV-1a hash for IPv6
+                var hash: u64 = 0xcbf29ce484222325;
+                for (address.in6.sa.addr) |byte| {
+                    hash ^= byte;
+                    hash *%= 0x100000001b3;
+                }
+                hash ^= address.in6.sa.port;
+                hash *%= 0x100000001b3;
+                break :blk @bitCast(hash);
+            },
+            else => 0,
+        };
+    }
 
     /// Please provide a proper allocator.
     ///
@@ -38,7 +63,7 @@ pub const Server = struct {
                 options.address,
                 options.port,
             ),
-            .connections = std.StringHashMap(Connection).init(options.allocator),
+            .connections = std.AutoHashMap(i64, Connection).init(options.allocator),
             .connections_mutex = Mutex{},
             .tick_thread = null,
             .connect_callback = options.connect_callback,
@@ -54,32 +79,26 @@ pub const Server = struct {
             const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
             self.connections_mutex.lock();
 
-            const buffer: [][]const u8 = &[_][]const u8{};
-            var to_remove = std.ArrayList([]const u8).initBuffer(buffer);
-
-            defer to_remove.deinit(self.options.allocator);
+            var to_remove: [64]i64 = undefined;
+            var remove_count: usize = 0;
 
             {
                 var itter = self.connections.iterator();
                 while (itter.next()) |val| {
                     if (val.value_ptr.active) {
                         val.value_ptr.tick();
-                    } else {
-                        to_remove.append(self.options.allocator, val.key_ptr.*) catch {
-                            Logger.ERROR("Failed to append to removal list", .{});
-                            continue;
-                        };
+                    } else if (remove_count < to_remove.len) {
+                        to_remove[remove_count] = val.key_ptr.*;
+                        remove_count += 1;
                     }
                 }
             }
 
-            for (to_remove.items) |key| {
+            for (to_remove[0..remove_count]) |key| {
                 if (self.connections.getPtr(key)) |connection| {
                     connection.deinit();
-                    if (self.connections.fetchRemove(key)) |removed| {
-                        Logger.INFO("Disconnected connection with key: {s}", .{removed.key});
-                        self.options.allocator.free(removed.key);
-                    }
+                    _ = self.connections.remove(key);
+                    Logger.INFO("Disconnected connection with key: {d}", .{key});
                 }
             }
 
@@ -119,11 +138,6 @@ pub const Server = struct {
         }
     }
 
-    pub fn getAddressAsKey(self: *Self, address: std.net.Address, buf: *[48]u8) []const u8 {
-        _ = self;
-        return std.fmt.bufPrint(buf, "{any}", .{address}) catch "";
-    }
-
     pub fn packet_callback(data: []const u8, from_addr: std.net.Address, context: ?*anyopaque, allocator: std.mem.Allocator) void {
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
@@ -132,8 +146,7 @@ pub const Server = struct {
 
         var ID: u8 = data[0];
         if (ID & 0xF0 == 0x80) ID = 0x80;
-        var key_buf: [48]u8 = undefined;
-        const key = getAddressAsKey(self, from_addr, &key_buf);
+        const key = addressToKey(from_addr);
 
         switch (ID) {
             Packets.UnconnectedPing => {
@@ -202,13 +215,7 @@ pub const Server = struct {
                         return;
                     };
 
-                    const key_copy = self.options.allocator.dupe(u8, key) catch |err| {
-                        Logger.ERROR("Failed to copy connection key: {s}", .{@errorName(err)});
-                        return;
-                    };
-
-                    self.connections.put(key_copy, connection) catch |err| {
-                        self.options.allocator.free(key_copy);
+                    self.connections.put(key, connection) catch |err| {
                         Logger.ERROR("Failed to add connection to list: {s}", .{@errorName(err)});
                         return;
                     };
@@ -285,21 +292,18 @@ pub const Server = struct {
     pub fn disconnect(self: *Self, address: std.net.Address) void {
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
-        var key_buf: [48]u8 = undefined;
-        const key = self.getAddressAsKey(address, &key_buf);
-        Logger.INFO("Disconnecting connection with key: {s}", .{key});
+        const key = addressToKey(address);
+        Logger.INFO("Disconnecting connection with key: {d}", .{key});
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
         if (self.connections.getPtr(key)) |connection| {
             connection.deinit();
-            if (self.connections.fetchRemove(key)) |removed| {
-                Logger.DEBUG("Connection disconnected successfully: {s}", .{removed.key});
-                self.options.allocator.free(removed.key);
-            }
+            _ = self.connections.remove(key);
+            Logger.DEBUG("Connection disconnected successfully: {d}", .{key});
         } else {
-            Logger.WARN("Attempted to disconnect non-existent connection: {s}", .{key});
+            Logger.WARN("Attempted to disconnect non-existent connection: {d}", .{key});
         }
 
         if (PERFORM_TIME_CHECKS) {
@@ -323,8 +327,7 @@ pub const Server = struct {
 
     /// Get a connection by address (thread-safe)
     pub fn getConnection(self: *Self, address: std.net.Address) ?*Connection {
-        var key_buf: [48]u8 = undefined;
-        const key = self.getAddressAsKey(address, &key_buf);
+        const key = addressToKey(address);
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -368,27 +371,6 @@ pub const Server = struct {
             entry.value_ptr.deinit();
         }
 
-        // Use a separate loop to clear and free all keys to avoid iterator invalidation
-        const buffer: [][]const u8 = &[_][]const u8{};
-        var key_list = std.ArrayList([]const u8).initBuffer(buffer);
-        defer key_list.deinit(self.options.allocator);
-
-        {
-            var key_it = self.connections.keyIterator();
-            while (key_it.next()) |key_ptr| {
-                key_list.append(self.options.allocator, key_ptr.*) catch {
-                    Logger.ERROR("Failed to append to key list during cleanup", .{});
-                    continue;
-                };
-            }
-        }
-
-        for (key_list.items) |key| {
-            if (self.connections.fetchRemove(key)) |removed| {
-                self.options.allocator.free(removed.key);
-            }
-        }
-
         self.connections.deinit();
 
         if (PERFORM_TIME_CHECKS) {
@@ -421,3 +403,46 @@ pub const ServerOptions = struct {
     disconnect_callback: ?DisconnectCallback = null,
     disconnect_context: ?*anyopaque = null,
 };
+
+test "addressToKey IPv4 produces unique keys" {
+    const addr1 = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 19132);
+    const addr2 = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 19133);
+    const addr3 = std.net.Address.initIp4(.{ 192, 168, 1, 1 }, 19132);
+
+    const key1 = Server.addressToKey(addr1);
+    const key2 = Server.addressToKey(addr2);
+    const key3 = Server.addressToKey(addr3);
+
+    // Same IP different port -> different key
+    try std.testing.expect(key1 != key2);
+    // Different IP same port -> different key
+    try std.testing.expect(key1 != key3);
+    // Same address -> same key
+    try std.testing.expectEqual(key1, Server.addressToKey(addr1));
+}
+
+test "addressToKey IPv6 produces unique keys" {
+    const addr1 = std.net.Address.initIp6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 19132, 0, 0);
+    const addr2 = std.net.Address.initIp6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 19133, 0, 0);
+    const addr3 = std.net.Address.initIp6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 }, 19132, 0, 0);
+
+    const key1 = Server.addressToKey(addr1);
+    const key2 = Server.addressToKey(addr2);
+    const key3 = Server.addressToKey(addr3);
+
+    try std.testing.expect(key1 != key2);
+    try std.testing.expect(key1 != key3);
+    try std.testing.expectEqual(key1, Server.addressToKey(addr1));
+}
+
+test "Server init and deinit" {
+    const allocator = std.testing.allocator;
+    var server = try Server.init(.{
+        .allocator = allocator,
+        .port = 0, // Use ephemeral port for testing
+    });
+    defer server.deinit();
+
+    try std.testing.expect(!server.running);
+    try std.testing.expectEqual(@as(usize, 0), server.connections.count());
+}
