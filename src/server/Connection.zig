@@ -8,6 +8,7 @@ const MAX_ACTIVE_FRAGMENTATIONS = 32;
 const MAX_ORDERING_QUEUE_SIZE = 64;
 
 const PERFORM_TIME_CHECKS = false;
+const DEBUG = false;
 
 // Game packet callback for Connection (packet ID 254)
 pub const GamePacketCallback = *const fn (connection: *Connection, payload: []const u8, context: ?*anyopaque) void;
@@ -90,7 +91,8 @@ pub const Connection = struct {
             Proto.Packets.NewIncomingConnection => {
                 self.connected = true;
                 const elapsed = std.time.milliTimestamp() - self.created_at;
-                Logger.DEBUG("Connection established in {d}ms", .{elapsed});
+                if (DEBUG)
+                    Logger.DEBUG("Connection established in {d}ms", .{elapsed});
                 // Trigger server connect callback
                 if (self.server.connect_callback) |callback| {
                     callback(self, self.server.connect_context);
@@ -129,7 +131,8 @@ pub const Connection = struct {
 
                 const frame = frameIn(serialized, allocator);
                 self.sendFrame(frame, .Immediate);
-                Logger.DEBUG("Responded to ConnectedPing with ConnectedPong", .{});
+                if (DEBUG)
+                    Logger.DEBUG("Responded to ConnectedPing with ConnectedPong", .{});
             },
             Proto.Packets.ConnectedPong => {
                 var pong = Proto.ConnectedPong.deserialize(payload, allocator) catch |err| {
@@ -139,7 +142,8 @@ pub const Connection = struct {
                 defer pong.deinit();
                 const current_time = std.time.milliTimestamp();
                 const rtt = current_time - pong.timestamp; // Round trip time
-                Logger.DEBUG("Received ConnectedPong - RTT: {d}ms", .{rtt});
+                if (DEBUG)
+                    Logger.DEBUG("Received ConnectedPong - RTT: {d}ms", .{rtt});
             },
             else => {
                 Logger.WARN("Unhandeled Packet {d}", .{ID});
@@ -356,7 +360,8 @@ pub const Connection = struct {
         if (!self.active) return;
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
-        Logger.DEBUG("Ordered Frame!", .{});
+        if (DEBUG)
+            Logger.DEBUG("Ordered Frame!", .{});
         const channel = frame.order_channel orelse {
             Logger.ERROR("Ordered frame missing order_channel", .{});
             return;
@@ -798,7 +803,8 @@ pub const Connection = struct {
         const frame = frameIn(serialized, allocator);
         self.sendFrame(frame, .Normal);
 
-        Logger.DEBUG("Sent ConnectedPing with timestamp: {d}", .{timestamp});
+        if (DEBUG)
+            Logger.DEBUG("Sent ConnectedPing with timestamp: {d}", .{timestamp});
     }
 };
 
