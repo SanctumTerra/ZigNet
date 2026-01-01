@@ -393,15 +393,11 @@ pub const Socket = struct {
             if (buffer_shortage) {
                 // Sleep briefly to let buffers free up
                 std.Thread.sleep(current_sleep_ns / 2);
-            } else if (packets_processed > 0) {
-                // We processed some packets, stay responsive
-                std.Thread.sleep(Config.BASE_SLEEP_NS);
-                // Keep the current_sleep_ns at minimum when active
-                current_sleep_ns = Config.BASE_SLEEP_NS;
-            } else {
+            } else if (packets_processed == 0) {
                 // No packets processed, use adaptive sleep
                 std.Thread.sleep(current_sleep_ns);
             }
+            // When packets were processed, loop immediately without sleeping
         }
     }
 

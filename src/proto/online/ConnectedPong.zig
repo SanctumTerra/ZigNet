@@ -4,59 +4,58 @@ const Packets = @import("../Packets.zig").Packets;
 const Logger = @import("../../misc/Logger.zig").Logger;
 
 pub const ConnectedPong = struct {
+    stream: BinaryStream,
     timestamp: i64,
     pong_timestamp: i64,
+    owns_stream: bool,
 
-    pub fn init(timestamp: i64, pong_timestamp: i64) ConnectedPong {
-        return .{ .timestamp = timestamp, .pong_timestamp = pong_timestamp };
-    }
-
-    pub fn deinit(self: *ConnectedPong, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
-
-    pub fn serialize(self: *ConnectedPong, allocator: std.mem.Allocator) ![]const u8 {
-        const buffer = &[_]u8{};
-        var stream = BinaryStream.init(allocator, buffer, 0);
-        defer stream.deinit();
-
-        try stream.writeUint8(Packets.ConnectedPong);
-        try stream.writeInt64(self.timestamp, .Big);
-        try stream.writeInt64(self.pong_timestamp, .Big);
-
-        return stream.getBufferOwned(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize ConnectedPong: {any}", .{err});
-            return &[_]u8{};
+    pub fn init(timestamp: i64, pong_timestamp: i64, allocator: std.mem.Allocator) ConnectedPong {
+        return .{
+            .stream = BinaryStream.init(allocator, null, null),
+            .timestamp = timestamp,
+            .pong_timestamp = pong_timestamp,
+            .owns_stream = false,
         };
     }
 
+    pub fn deinit(self: *ConnectedPong) void {
+        self.stream.deinit();
+    }
+
+    pub fn serialize(self: *ConnectedPong) ![]const u8 {
+        try self.stream.writeUint8(Packets.ConnectedPong);
+        try self.stream.writeInt64(self.timestamp, .Big);
+        try self.stream.writeInt64(self.pong_timestamp, .Big);
+        return self.stream.payload.items;
+    }
+
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectedPong {
-        var stream = BinaryStream.init(allocator, data, 0);
-        defer stream.deinit();
+        var stream = BinaryStream.init(allocator, data, null);
+        errdefer stream.deinit();
 
-        // Skip packet ID
         _ = try stream.readUint8();
-
-        // Read timestamps
         const timestamp = try stream.readInt64(.Big);
         const pong_timestamp = try stream.readInt64(.Big);
 
-        return ConnectedPong.init(timestamp, pong_timestamp);
+        return .{
+            .stream = stream,
+            .timestamp = timestamp,
+            .pong_timestamp = pong_timestamp,
+            .owns_stream = true,
+        };
     }
 };
 
 test "ConnectedPong" {
     const allocator = std.testing.allocator;
 
-    var connected_pong = ConnectedPong.init(123456789, 987654321);
-    defer connected_pong.deinit(allocator);
+    var connected_pong = ConnectedPong.init(123456789, 987654321, allocator);
 
-    const serialized = try connected_pong.serialize(allocator);
-    defer allocator.free(serialized);
+    const serialized = try connected_pong.serialize();
 
     var deserialized = try ConnectedPong.deserialize(serialized, allocator);
-    defer deserialized.deinit(allocator);
+    defer deserialized.deinit();
+    connected_pong.deinit();
 
     try std.testing.expectEqual(connected_pong.timestamp, deserialized.timestamp);
     try std.testing.expectEqual(connected_pong.pong_timestamp, deserialized.pong_timestamp);

@@ -30,7 +30,9 @@ pub fn main() !void {
 
     var client = try Client.init(.{
         .allocator = allocator,
-        .address = "51.178.216.177",
+        // .address = "51.178.216.177",
+        .address = "127.0.0.1",
+        .port = 19132,
     });
     connect_start_time = std.time.milliTimestamp();
     try client.connect();

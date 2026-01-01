@@ -139,20 +139,16 @@ pub const Server = struct {
                 const string = self.options.advertisement.toString(self.options.allocator);
                 defer self.options.allocator.free(string);
                 var pong = Proto.UnconnectedPong.init(
-                    self.options.allocator,
                     std.time.milliTimestamp(),
                     self.options.advertisement.guid,
                     string,
-                ) catch |err| {
-                    Logger.ERROR("Failed to create unconnected pong: {s}", .{@errorName(err)});
-                    return;
-                };
-                defer pong.deinit(allocator); // must deinig the pong data.
-                const pong_data = pong.serialize(self.options.allocator) catch |err| {
+                    self.options.allocator,
+                );
+                defer pong.deinit(allocator);
+                const pong_data = pong.serialize() catch |err| {
                     Logger.ERROR("Failed to serialize unconnected pong: {s}", .{@errorName(err)});
                     return;
                 };
-                defer self.options.allocator.free(pong_data);
                 self.send(pong_data, from_addr);
             },
             Packets.OpenConnectionRequest1 => {
@@ -160,21 +156,22 @@ pub const Server = struct {
                     self.options.advertisement.guid,
                     false,
                     1492,
+                    self.options.allocator,
                 );
-                const reply_data = reply.serialize(self.options.allocator) catch |err| {
+                defer reply.deinit();
+                const reply_data = reply.serialize() catch |err| {
                     Logger.ERROR("Failed to serialize connection reply 1: {s}", .{@errorName(err)});
                     return;
                 };
-                defer self.options.allocator.free(reply_data);
                 self.send(reply_data, from_addr);
             },
             Packets.OpenConnectionRequest2 => {
-                const request = Proto.ConnectionRequest2.deserialize(data, self.options.allocator) catch |err| {
+                var request = Proto.ConnectionRequest2.deserialize(data, self.options.allocator) catch |err| {
                     Logger.ERROR("Failed to deserialize connection request 2: {s}", .{@errorName(err)});
                     return;
                 };
+                defer request.deinit(allocator);
 
-                defer request.address.deinit(allocator);
                 const address = Proto.Address.init(4, "0.0.0.0", 0);
 
                 var reply = Proto.ConnectionReply2.init(
@@ -182,13 +179,14 @@ pub const Server = struct {
                     address,
                     request.mtu_size,
                     false,
+                    self.options.allocator,
                 );
+                defer reply.deinit(allocator);
                 const reply_data = reply.serialize(self.options.allocator) catch |err| {
                     Logger.ERROR("Failed to serialize connection reply 2: {s}", .{@errorName(err)});
                     return;
                 };
 
-                defer self.options.allocator.free(reply_data);
                 self.send(reply_data, from_addr);
 
                 self.connections_mutex.lock();

@@ -76,12 +76,12 @@ pub const Connection = struct {
         // TODO! ConnectedPing / Pong
         switch (ID) {
             Proto.Packets.ConnectionRequest => {
-                const request = try Proto.ConnectionRequest.deserialize(payload, allocator);
-                // Logger.INFO("Packet {any}", .{request});
+                var request = try Proto.ConnectionRequest.deserialize(payload, allocator);
+                defer request.deinit();
                 const empty_address = Proto.Address.init(4, "0.0.0.0", 0);
-                var accepted = Proto.ConnectionRequestAccepted.init(empty_address, 0, empty_address, request.timestamp, std.time.milliTimestamp());
+                var accepted = Proto.ConnectionRequestAccepted.init(empty_address, 0, empty_address, request.timestamp, std.time.milliTimestamp(), allocator);
+                defer accepted.deinit(allocator);
                 const serialized = try accepted.serialize(allocator);
-                defer allocator.free(serialized);
                 const frame = frameIn(serialized, allocator);
                 self.sendFrame(frame, .Immediate);
             },
@@ -99,8 +99,6 @@ pub const Connection = struct {
                 if (self.server.disconnect_callback) |callback| {
                     callback(self, self.server.disconnect_context);
                 }
-                // self.server.disconnect(self.address);
-                // defer self.server.options.allocator.free(self.address);
             },
             254 => {
                 // Game packet - trigger connection game packet callback
@@ -111,33 +109,33 @@ pub const Connection = struct {
                 }
             },
             Proto.Packets.ConnectedPing => {
-                const ping = Proto.ConnectedPing.deserialize(payload, allocator) catch |err| {
+                var ping = Proto.ConnectedPing.deserialize(payload, allocator) catch |err| {
                     Logger.ERROR("Failed to deserialize ConnectedPing: {any}", .{err});
                     return;
                 };
+                defer ping.deinit();
                 const current_time = std.time.milliTimestamp();
-                var pong = Proto.ConnectedPong.init(ping.timestamp, current_time);
-                defer pong.deinit(allocator);
+                var pong = Proto.ConnectedPong.init(ping.timestamp, current_time, allocator);
+                defer pong.deinit();
 
-                const serialized = pong.serialize(allocator) catch |err| {
+                const serialized = pong.serialize() catch |err| {
                     Logger.ERROR("Failed to serialize ConnectedPong: {any}", .{err});
                     return;
                 };
-                defer allocator.free(serialized);
 
                 const frame = frameIn(serialized, allocator);
                 self.sendFrame(frame, .Immediate);
                 Logger.DEBUG("Responded to ConnectedPing with ConnectedPong", .{});
             },
             Proto.Packets.ConnectedPong => {
-                const pong = Proto.ConnectedPong.deserialize(payload, allocator) catch |err| {
+                var pong = Proto.ConnectedPong.deserialize(payload, allocator) catch |err| {
                     Logger.ERROR("Failed to deserialize ConnectedPong: {any}", .{err});
                     return;
                 };
+                defer pong.deinit();
                 const current_time = std.time.milliTimestamp();
                 const rtt = current_time - pong.timestamp; // Round trip time
                 Logger.DEBUG("Received ConnectedPong - RTT: {d}ms", .{rtt});
-                // Here you could store RTT statistics if needed
             },
             else => {
                 Logger.WARN("Unhandeled Packet {d}", .{ID});
@@ -266,14 +264,10 @@ pub const Connection = struct {
         for (nack.sequences) |seq| {
             const frames = self.comm_data.output_backup.get(@as(u24, @intCast(seq)));
             if (frames) |f| {
-                var frameset = Proto.FrameSet{
-                    .frames = f,
-                    .sequence_number = @as(u24, @intCast(seq)),
-                };
-                var stream = Proto.BinaryStream.init(self.server.options.allocator, null, null);
-                defer stream.deinit();
-                try frameset.serialize(&stream);
-                self.send(stream.payload.items);
+                var frameset = Proto.FrameSet.init(@as(u24, @intCast(seq)), f, self.server.options.allocator);
+                const serialized = frameset.serialize() catch continue;
+                self.send(serialized);
+                frameset.deinit(self.server.options.allocator);
             }
         }
 
@@ -290,10 +284,7 @@ pub const Connection = struct {
         self.last_receive = std.time.milliTimestamp();
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
-        var stream = Proto.BinaryStream.init(self.server.options.allocator, buffer, null);
-        defer stream.deinit(); // Frames borrow from stream, so deinit after handling
-
-        const frameSet = try Proto.FrameSet.deserialize(&stream, self.server.options.allocator);
+        var frameSet = try Proto.FrameSet.deserialize(buffer, self.server.options.allocator);
         defer frameSet.deinit(self.server.options.allocator);
 
         const sequence = frameSet.sequence_number;
@@ -709,11 +700,10 @@ pub const Connection = struct {
         const sequence = @as(u24, @truncate(self.comm_data.output_sequence));
         self.comm_data.output_sequence += 1;
 
-        var frameset = Proto.FrameSet{ .sequence_number = sequence, .frames = backup };
-        var stream = Proto.BinaryStream.init(allocator, null, null);
-        defer stream.deinit();
-        frameset.serialize(&stream) catch |err| {
+        var frameset = Proto.FrameSet.init(sequence, backup, allocator);
+        const serialized = frameset.serialize() catch |err| {
             Logger.ERROR("Failed to serialize frameset: {any}", .{err});
+            frameset.deinit(allocator);
             return;
         };
 
@@ -736,7 +726,8 @@ pub const Connection = struct {
         };
 
         self.cleanupOutputQueueFrames(count);
-        self.send(stream.payload.items);
+        self.send(serialized);
+        frameset.deinit(allocator);
 
         if (PERFORM_TIME_CHECKS) {
             const end_time = std.time.milliTimestamp();
@@ -792,14 +783,13 @@ pub const Connection = struct {
         const allocator = self.server.options.allocator;
         const timestamp = std.time.milliTimestamp();
 
-        var ping = Proto.ConnectedPing.init(timestamp);
-        defer ping.deinit(allocator);
+        var ping = Proto.ConnectedPing.init(timestamp, allocator);
+        defer ping.deinit();
 
-        const serialized = ping.serialize(allocator) catch |err| {
+        const serialized = ping.serialize() catch |err| {
             Logger.ERROR("Failed to serialize ConnectedPing: {any}", .{err});
             return;
         };
-        defer allocator.free(serialized);
 
         const frame = frameIn(serialized, allocator);
         self.sendFrame(frame, .Normal);

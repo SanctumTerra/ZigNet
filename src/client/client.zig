@@ -97,10 +97,9 @@ pub const Client = struct {
         self.last_receive = std.time.milliTimestamp();
 
         self.tick_thread = try std.Thread.spawn(.{}, tickLoop, .{self});
-        var request = OpenConnectionRequest1.init(11, self.options.mtu_size);
-        defer request.deinit(self.options.allocator);
+        var request = OpenConnectionRequest1.init(11, self.options.mtu_size, self.options.allocator);
+        defer request.deinit();
         const payload = try request.serialize(self.options.allocator);
-        defer self.options.allocator.free(payload);
         try self.send(payload);
         // std.debug.print("Client sent OpenConnectionRequest1 to {s}:{d}\n", .{ self.options.address, self.options.port });
     }
@@ -147,7 +146,8 @@ pub const Client = struct {
                 if (self.received_reply1) return;
                 self.received_reply1 = true;
 
-                const packet = try OpenConnectionReply1.deserialize(payload, allocator);
+                var packet = try OpenConnectionReply1.deserialize(payload, allocator);
+                defer packet.deinit();
 
                 // Store security info from the server
                 self.server_has_security = packet.hasSecurity;
@@ -161,13 +161,12 @@ pub const Client = struct {
 
                 // If server has security with cookie, send it back with client_supports_security=false
                 var r2 = if (packet.hasSecurity and packet.cookie != null)
-                    OpenConnectionRequest2.initWithSecurity(address, mtu_to_use, self.options.guid, packet.cookie.?, false)
+                    OpenConnectionRequest2.initWithSecurity(address, mtu_to_use, self.options.guid, packet.cookie.?, false, allocator)
                 else
-                    OpenConnectionRequest2.init(address, mtu_to_use, self.options.guid);
+                    OpenConnectionRequest2.init(address, mtu_to_use, self.options.guid, allocator);
+                defer r2.deinit(allocator);
 
                 const ser = try r2.serialize(allocator);
-                defer allocator.free(ser);
-
                 try self.send(ser);
             },
             Packets.OpenConnectionReply2 => {
@@ -175,24 +174,21 @@ pub const Client = struct {
                 if (self.received_reply2) return;
                 self.received_reply2 = true;
 
-                const reply = try ConnectionReply2.deserialize(payload, allocator);
-                defer {
-                    reply.address.deinit(allocator);
-                }
-                // std.debug.print("Received connection reply 2: {any}\n", .{reply});
+                var reply = try ConnectionReply2.deserialize(payload, allocator);
+                defer reply.deinit(allocator);
+
                 var request = ConnectionRequest.init(
                     self.options.guid,
                     reply.mtu,
                     false,
+                    allocator,
                 );
-                const serialized = try request.serialize(allocator);
-                defer allocator.free(serialized);
+                defer request.deinit();
+                const serialized = try request.serialize();
 
                 var frame = frameIn(serialized, allocator);
                 self.sendFrame(&frame, .Immediate);
                 frame.deinit(allocator);
-
-                // std.debug.print("Client connected to {s}:{d}\n", .{ self.options.address, self.options.port });
             },
             Packets.FrameSet => {
                 try self.onFrameSet(payload);
@@ -241,10 +237,7 @@ pub const Client = struct {
 
         self.last_receive = std.time.milliTimestamp();
 
-        var stream = Proto.BinaryStream.init(self.options.allocator, buffer, null);
-        defer stream.deinit(); // Frames borrow from stream, so deinit after handling
-
-        const frameSet = try Proto.FrameSet.deserialize(&stream, self.options.allocator);
+        var frameSet = try Proto.FrameSet.deserialize(buffer, self.options.allocator);
         defer frameSet.deinit(self.options.allocator);
 
         const sequence = frameSet.sequence_number;
@@ -521,20 +514,18 @@ pub const Client = struct {
 
         switch (ID) {
             Proto.Packets.ConnectionRequestAccepted => {
-                const pak = try ConnectionRequestAccepted.deserialize(payload, allocator);
-                defer {
-                    pak.address.deinit(allocator);
-                    pak.addresses.deinit(allocator);
-                }
+                var pak = try ConnectionRequestAccepted.deserialize(payload, allocator);
+                defer pak.deinit(allocator);
 
                 var nic = NewIncomingConnection.init(
                     Address.init(4, self.options.address, self.options.port),
                     Address.init(4, "0.0.0.0", 0),
                     std.time.milliTimestamp(),
                     pak.timestamp,
+                    allocator,
                 );
+                defer nic.deinit(allocator);
                 const serialized = try nic.serialize(allocator);
-                defer allocator.free(serialized);
 
                 var frame = Client.frameIn(serialized, allocator);
                 self.sendFrame(&frame, .Immediate);
@@ -565,13 +556,15 @@ pub const Client = struct {
                 // std.debug.print("Received game packet (ID 254)\n", .{});
             },
             Packets.ConnectedPing => {
-                const ping = try ConnectedPing.deserialize(payload, self.options.allocator);
+                var ping = try ConnectedPing.deserialize(payload, self.options.allocator);
+                defer ping.deinit();
                 var pong = ConnectedPong.init(
                     ping.timestamp,
                     std.time.milliTimestamp(),
+                    self.options.allocator,
                 );
-                const ser = try pong.serialize(self.options.allocator);
-                defer self.options.allocator.free(ser);
+                defer pong.deinit();
+                const ser = try pong.serialize();
                 var frame = Client.frameIn(ser, self.options.allocator);
                 self.sendFrame(&frame, .Immediate);
                 frame.deinit(allocator);
@@ -747,22 +740,21 @@ pub const Client = struct {
         self.comm_data.output_sequence += 1;
 
         // Serialize directly from queue frames (no copy needed)
-        var frameset = Proto.FrameSet{ .sequence_number = sequence, .frames = frames };
-        var stream = Proto.BinaryStream.init(allocator, null, null);
-        frameset.serialize(&stream) catch |err| {
+        var frameset = Proto.FrameSet.init(sequence, frames, allocator);
+        const serialized = frameset.serialize() catch |err| {
             Logger.ERROR("Failed to serialize frameset: {any}", .{err});
-            stream.deinit();
+            frameset.deinit(allocator);
             return;
         };
 
         // Store serialized bytes for potential retransmission
-        const backup_bytes = stream.getBufferOwned(allocator) catch |err| {
-            Logger.ERROR("Failed to get buffer owned: {any}", .{err});
-            stream.deinit();
+        const backup_bytes = allocator.dupe(u8, serialized) catch |err| {
+            Logger.ERROR("Failed to dupe serialized bytes: {any}", .{err});
+            frameset.deinit(allocator);
             self.cleanupOutputQueueFramesLocked(count);
             return;
         };
-        stream.deinit();
+        frameset.deinit(allocator);
 
         // Clean up old backup if exists
         if (self.comm_data.output_backup.get(sequence)) |old_bytes| {

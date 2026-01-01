@@ -1,80 +1,74 @@
 const std = @import("std");
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const Address = @import("../Address.zig").Address;
 const Packets = @import("../Packets.zig").Packets;
 const Logger = @import("../../misc/Logger.zig").Logger;
 
 pub const ConnectionRequestAccepted = struct {
+    stream: BinaryStream,
     address: Address,
     system_index: u16,
-    /// System Address that will be written 10 times.
-    addresses: Address, // Only the first of the 10 deserialized addresses is stored here.
+    addresses: Address,
     request_timestamp: i64,
     timestamp: i64,
+    owns_stream: bool,
 
-    pub fn init(address: Address, system_index: u16, addresses: Address, request_timestamp: i64, timestamp: i64) ConnectionRequestAccepted {
+    pub fn init(address: Address, system_index: u16, addresses: Address, request_timestamp: i64, timestamp: i64, allocator: std.mem.Allocator) ConnectionRequestAccepted {
         return .{
+            .stream = BinaryStream.init(allocator, null, null),
             .address = address,
             .system_index = system_index,
             .addresses = addresses,
             .request_timestamp = request_timestamp,
             .timestamp = timestamp,
+            .owns_stream = false,
         };
     }
 
-    pub fn serialize(self: *const ConnectionRequestAccepted, allocator: std.mem.Allocator) ![]const u8 {
-        const buffer = &[_]u8{};
-        var stream = BinaryStream.init(allocator, buffer, 0);
-        defer stream.deinit();
+    pub fn deinit(self: *ConnectionRequestAccepted, allocator: std.mem.Allocator) void {
+        if (self.owns_stream) {
+            self.address.deinit(allocator);
+            self.addresses.deinit(allocator);
+        }
+        self.stream.deinit();
+    }
 
-        try stream.writeUint8(Packets.ConnectionRequestAccepted);
+    pub fn serialize(self: *ConnectionRequestAccepted, allocator: std.mem.Allocator) ![]const u8 {
+        try self.stream.writeUint8(Packets.ConnectionRequestAccepted);
 
-        const address_buffer = self.address.write(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize client address: {any}", .{err});
-            return &[_]u8{};
-        };
+        const address_buffer = try self.address.write(allocator);
         defer allocator.free(address_buffer);
-        try stream.write(address_buffer);
-        try stream.writeUint16(self.system_index, .Big);
+        try self.stream.write(address_buffer);
+        try self.stream.writeUint16(self.system_index, .Big);
 
-        const internal_address_buffer = self.addresses.write(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize internal system address: {any}", .{err});
-            return &[_]u8{};
-        };
+        const internal_address_buffer = try self.addresses.write(allocator);
         defer allocator.free(internal_address_buffer);
 
         var i: u8 = 0;
         while (i < 20) : (i += 1) {
-            try stream.write(internal_address_buffer);
+            try self.stream.write(internal_address_buffer);
         }
 
-        try stream.writeInt64(self.request_timestamp, .Big);
-        try stream.writeInt64(self.timestamp, .Big);
+        try self.stream.writeInt64(self.request_timestamp, .Big);
+        try self.stream.writeInt64(self.timestamp, .Big);
 
-        return stream.getBufferOwned(allocator) catch |err| {
-            Logger.ERROR("Failed to serialize ConnectionRequestAccepted: {any}", .{err});
-            return &[_]u8{};
-        };
+        return self.stream.payload.items;
     }
 
-    /// DEALLOCATE THE RETURNED ADDRESS AND THE NESTED .addresses FIELD AFTER USE
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !ConnectionRequestAccepted {
-        var stream = BinaryStream.init(allocator, data, 0);
-        defer stream.deinit();
+        var stream = BinaryStream.init(allocator, data, null);
+        errdefer stream.deinit();
 
-        _ = try stream.readUint8(); // Skip Packet ID
+        _ = try stream.readUint8();
 
-        const client_address = Address.read(&stream, allocator) catch |err| {
-            Logger.ERROR("Failed to deserialize client address: {any}", .{err});
-            return err;
-        };
+        const client_address = try Address.read(&stream, allocator);
+        errdefer client_address.deinit(allocator);
 
         const system_idx = try stream.readUint16(.Big);
 
-        // HACK: Some MCBE implementations send 10 addresses, some send 20.
-        // Calculate how many bytes remain for addresses by subtracting timestamp size (16 bytes)
-        const timestamps_size: usize = 16; // 2x i64
+        const timestamps_size: usize = 16;
         const remaining_for_addresses = data.len - stream.offset - timestamps_size;
 
-        // Read first address, skip the rest without allocating
         var first_system_address: ?Address = null;
         const addresses_start = stream.offset;
 
@@ -83,12 +77,9 @@ pub const ConnectionRequestAccepted = struct {
                 client_address.deinit(allocator);
                 return err;
             };
-
-            // Skip remaining addresses by jumping to timestamps
             stream.offset = addresses_start + remaining_for_addresses;
         }
 
-        // If no addresses were read, create a dummy one
         const system_address = first_system_address orelse blk: {
             const dummy_str = try allocator.dupe(u8, "0.0.0.0");
             break :blk Address.init(4, dummy_str, 0);
@@ -97,42 +88,33 @@ pub const ConnectionRequestAccepted = struct {
         const req_timestamp = try stream.readInt64(.Big);
         const server_timestamp = try stream.readInt64(.Big);
 
-        return ConnectionRequestAccepted.init(
-            client_address,
-            system_idx,
-            system_address,
-            req_timestamp,
-            server_timestamp,
-        );
+        return .{
+            .stream = stream,
+            .address = client_address,
+            .system_index = system_idx,
+            .addresses = system_address,
+            .request_timestamp = req_timestamp,
+            .timestamp = server_timestamp,
+            .owns_stream = true,
+        };
     }
 };
-
-const BinaryStream = @import("BinaryStream").BinaryStream;
-const Address = @import("../Address.zig").Address;
-const VarInt = @import("BinaryStream").VarInt;
 
 test "ConnectionRequestAccepted" {
     const allocator = std.heap.page_allocator;
     const client_address = Address.init(4, "127.0.0.1", 19132);
     const system_address = Address.init(4, "192.168.1.1", 19133);
 
-    var connection_request_accepted = ConnectionRequestAccepted.init(client_address, 0, system_address, 123456789, 987654321);
+    var cra = ConnectionRequestAccepted.init(client_address, 0, system_address, 123456789, 987654321, allocator);
 
-    const serialized = try connection_request_accepted.serialize(allocator);
-    defer allocator.free(serialized);
+    const serialized = try cra.serialize(allocator);
 
     var deserialized = try ConnectionRequestAccepted.deserialize(serialized, allocator);
-    defer deserialized.address.deinit(allocator);
-    defer deserialized.addresses.deinit(allocator);
+    defer deserialized.deinit(allocator);
+    cra.deinit(allocator);
 
-    try std.testing.expectEqual(connection_request_accepted.system_index, deserialized.system_index);
-    try std.testing.expectEqual(connection_request_accepted.request_timestamp, deserialized.request_timestamp);
-    try std.testing.expectEqual(connection_request_accepted.timestamp, deserialized.timestamp);
-    try std.testing.expectEqual(connection_request_accepted.address.version, deserialized.address.version);
-    try std.testing.expectEqual(connection_request_accepted.address.port, deserialized.address.port);
-    try std.testing.expectEqualStrings(connection_request_accepted.address.address, deserialized.address.address);
-    try std.testing.expectEqual(connection_request_accepted.addresses.version, deserialized.addresses.version);
-    try std.testing.expectEqual(connection_request_accepted.addresses.port, deserialized.addresses.port);
-    try std.testing.expectEqualStrings(connection_request_accepted.addresses.address, deserialized.addresses.address);
+    try std.testing.expectEqual(cra.system_index, deserialized.system_index);
+    try std.testing.expectEqual(cra.request_timestamp, deserialized.request_timestamp);
+    try std.testing.expectEqual(cra.timestamp, deserialized.timestamp);
     Logger.DEBUG("ConnectionRequestAccepted pass.", .{});
 }

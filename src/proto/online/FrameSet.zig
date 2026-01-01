@@ -5,19 +5,35 @@ const std = @import("std");
 const Logger = @import("../../misc/Logger.zig").Logger;
 
 pub const FrameSet = struct {
+    stream: BinaryStream,
     sequence_number: u24,
     frames: []const Frame,
+    owns_frames: bool,
 
-    pub fn serialize(self: *const FrameSet, stream: *BinaryStream) !void {
-        try stream.writeUint8(Packets.FrameSet);
-        try stream.writeUint24(self.sequence_number, .Little);
-
-        for (self.frames) |frame| {
-            try frame.write(stream);
-        }
+    pub fn init(sequence_number: u24, frames: []const Frame, allocator: std.mem.Allocator) FrameSet {
+        return .{
+            .stream = BinaryStream.init(allocator, null, null),
+            .sequence_number = sequence_number,
+            .frames = frames,
+            .owns_frames = false,
+        };
     }
 
-    pub fn deserialize(stream: *BinaryStream, allocator: std.mem.Allocator) !FrameSet {
+    pub fn serialize(self: *FrameSet) ![]u8 {
+        try self.stream.writeUint8(Packets.FrameSet);
+        try self.stream.writeUint24(self.sequence_number, .Little);
+
+        for (self.frames) |frame| {
+            try frame.write(&self.stream);
+        }
+
+        return self.stream.payload.items;
+    }
+
+    pub fn deserialize(buffer: []const u8, allocator: std.mem.Allocator) !FrameSet {
+        var stream = BinaryStream.init(allocator, buffer, null);
+        errdefer stream.deinit();
+
         _ = try stream.readUint8(); // Skip packet type
         const sequence_number = try stream.readUint24(.Little);
 
@@ -26,19 +42,23 @@ pub const FrameSet = struct {
 
         const end_position = stream.payload.items.len;
         while (stream.offset < end_position) {
-            const frame = try Frame.read(stream);
+            const frame = try Frame.read(&stream);
             try frames.append(allocator, frame);
         }
 
         return FrameSet{
+            .stream = stream,
             .sequence_number = sequence_number,
             .frames = try frames.toOwnedSlice(allocator),
+            .owns_frames = true,
         };
     }
 
-    pub fn deinit(self: FrameSet, allocator: std.mem.Allocator) void {
-        // Frames don't own their payloads (they borrow from stream), just free the slice
-        allocator.free(self.frames);
+    pub fn deinit(self: *FrameSet, allocator: std.mem.Allocator) void {
+        if (self.owns_frames) {
+            allocator.free(self.frames);
+        }
+        self.stream.deinit();
     }
 };
 
@@ -61,25 +81,18 @@ test "FrameSet" {
         allocator);
 
     const frames = [_]Frame{frame};
-    const frameset = FrameSet{
-        .sequence_number = 42,
-        .frames = &frames,
-    };
+    var frameset = FrameSet.init(42, &frames, allocator);
 
-    var stream = BinaryStream.init(allocator, null, null);
-    defer stream.deinit();
+    const serialized = try frameset.serialize();
 
-    try frameset.serialize(&stream);
-
-    // Reset stream offset for reading
-    stream.offset = 0;
-    var deserialized = try FrameSet.deserialize(&stream, allocator);
+    var deserialized = try FrameSet.deserialize(serialized, allocator);
     defer deserialized.deinit(allocator);
+    frameset.deinit(allocator);
 
-    try std.testing.expectEqual(frameset.sequence_number, deserialized.sequence_number);
-    try std.testing.expectEqual(frameset.frames.len, deserialized.frames.len);
-    try std.testing.expectEqual(frameset.frames[0].reliability, deserialized.frames[0].reliability);
-    try std.testing.expectEqual(frameset.frames[0].reliable_frame_index, deserialized.frames[0].reliable_frame_index);
-    try std.testing.expectEqualSlices(u8, frameset.frames[0].payload, deserialized.frames[0].payload);
+    try std.testing.expectEqual(@as(u24, 42), deserialized.sequence_number);
+    try std.testing.expectEqual(frames.len, deserialized.frames.len);
+    try std.testing.expectEqual(frames[0].reliability, deserialized.frames[0].reliability);
+    try std.testing.expectEqual(frames[0].reliable_frame_index, deserialized.frames[0].reliable_frame_index);
+    try std.testing.expectEqualSlices(u8, frames[0].payload, deserialized.frames[0].payload);
     Logger.DEBUG("FrameSet pass.", .{});
 }
