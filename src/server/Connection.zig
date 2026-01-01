@@ -471,6 +471,12 @@ pub const Connection = struct {
 
         // Check if we already have the fragment id
         if (self.comm_data.fragments_queue.getPtr(split_id)) |fragment| {
+            // Check if we already have this fragment index (duplicate)
+            if (fragment.contains(@as(u16, @intCast(split_index)))) {
+                // Duplicate fragment, ignore
+                return;
+            }
+
             // Create a copy of the frame with duplicated payload to avoid use-after-free
             const payload_copy = allocator.dupe(u8, frame.payload) catch {
                 Logger.ERROR("Failed to duplicate frame payload", .{});
