@@ -21,6 +21,7 @@ pub const Server = struct {
     running: bool = false,
     connections: std.StringHashMap(Connection),
     connections_mutex: Mutex, // Add mutex for connections HashMap
+    tick_thread: ?Thread,
     connect_callback: ?ConnectCallback,
     connect_context: ?*anyopaque,
     disconnect_callback: ?DisconnectCallback,
