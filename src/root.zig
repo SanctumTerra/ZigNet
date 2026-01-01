@@ -12,6 +12,9 @@ pub const LoggerColors = @import("./misc/Logger.zig").Colors;
 pub const Client = @import("./client/client.zig").Client;
 pub const ClientOptions = @import("./client/client.zig").ClientOptions;
 
+pub const Priority = @import("./client/client.zig").Priority;
+pub const Reliability = @import("./proto/Frame.zig").Reliability;
+
 test "all" {
     std.testing.refAllDecls(@import("proto/offline/UnconnectedPong.zig"));
     std.testing.refAllDecls(@import("proto/offline/UnconnectedPing.zig"));
