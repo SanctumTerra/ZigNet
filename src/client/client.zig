@@ -209,6 +209,20 @@ pub const Client = struct {
         try self.socket.sendTo(payload, self.options.address, self.options.port);
     }
 
+    /// Disconnect from the server by sending DisconnectNotification
+    pub fn disconnect(self: *Client) void {
+        if (self.status == .Disconnected) return;
+
+        // Send DisconnectNotification packet (0x15)
+        var disconnect_payload = [_]u8{Proto.Packets.DisconnectNotification};
+        var frame = Client.frameIn(&disconnect_payload, self.options.allocator);
+        frame.reliability = Reliability.ReliableOrdered;
+        self.sendFrame(&frame, .Immediate);
+        frame.deinit(self.options.allocator);
+
+        self.status = .Disconnected;
+    }
+
     pub fn deinit(self: *Client) void {
         // Ensure thread stops before cleanup
         self.status = .Disconnected;
