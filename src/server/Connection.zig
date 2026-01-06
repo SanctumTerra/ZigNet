@@ -171,9 +171,14 @@ pub const Connection = struct {
         }
 
         const allocator = self.server.options.allocator;
-        const queue_len = self.comm_data.output_frame_queue.items.len;
-        if (queue_len > 0) {
+
+        // Send queued frames - may need multiple framesets due to MTU limits
+        while (self.comm_data.output_frame_queue.items.len > 0) {
+            const queue_len = self.comm_data.output_frame_queue.items.len;
+            const before_len = self.comm_data.output_frame_queue.items.len;
             self.sendQueue(queue_len);
+            // If sendQueue didn't remove any frames, break to avoid infinite loop
+            if (self.comm_data.output_frame_queue.items.len >= before_len) break;
         }
         if (self.comm_data.received_sequences.count() > 0) {
             var sequences_list = std.ArrayList(u32).initBuffer(&[_]u32{});
@@ -269,6 +274,7 @@ pub const Connection = struct {
         // Ack and Nack are same just different ids we do not check ids when deserializing so we can do this! :D
         var nack = try Proto.Ack.deserialize(payload, self.server.options.allocator);
         defer nack.deinit();
+
         for (nack.sequences) |seq| {
             const frames = self.comm_data.output_backup.get(@as(u24, @intCast(seq)));
             if (frames) |f| {
@@ -675,6 +681,7 @@ pub const Connection = struct {
             defer frame.deinit(self.server.options.allocator);
             return;
         };
+
         const should_send_immediately = priority == Priority.Immediate;
         const queue_len = self.comm_data.output_frame_queue.items.len;
         if (should_send_immediately) {
@@ -693,7 +700,37 @@ pub const Connection = struct {
 
         if (self.comm_data.output_frame_queue.items.len == 0) return;
         const allocator = self.server.options.allocator;
-        const count = @min(amount, self.comm_data.output_frame_queue.items.len);
+
+        // Calculate how many frames we can fit in one frameset without exceeding MTU
+        // Reserve space for frameset header (4 bytes) and some overhead
+        const max_frameset_size = self.mtu_size - 28; // Leave room for UDP/IP headers
+        var current_size: usize = 4; // Frameset header size
+        var frames_to_send: usize = 0;
+
+        const queue_len = self.comm_data.output_frame_queue.items.len;
+        const max_frames = @min(amount, queue_len);
+
+        for (self.comm_data.output_frame_queue.items[0..max_frames]) |frame| {
+            // Calculate frame size: header (variable) + payload
+            // Frame header is roughly 3 bytes minimum + reliability fields
+            const frame_overhead: usize = 28; // Conservative estimate for frame header
+            const frame_size = frame_overhead + frame.payload.len;
+
+            if (current_size + frame_size > max_frameset_size and frames_to_send > 0) {
+                // This frame would exceed MTU, stop here
+                break;
+            }
+
+            current_size += frame_size;
+            frames_to_send += 1;
+        }
+
+        if (frames_to_send == 0) {
+            // Single frame is too large? Send it anyway (it's already fragmented)
+            frames_to_send = 1;
+        }
+
+        const count = frames_to_send;
         const frames = self.comm_data.output_frame_queue.items[0..count];
 
         const backup = allocator.alloc(Frame, count) catch |err| {
