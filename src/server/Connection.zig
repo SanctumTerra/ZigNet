@@ -676,6 +676,12 @@ pub const Connection = struct {
     pub fn queueFrame(self: *Connection, frame: Frame, priority: Priority) void {
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
+        // Don't queue frames if connection is not active - prevents leaks during shutdown
+        if (!self.active) {
+            frame.deinit(self.server.options.allocator);
+            return;
+        }
+
         self.comm_data.output_frame_queue.append(self.server.options.allocator, frame) catch {
             Logger.ERROR("Failed to queue frame", .{});
             defer frame.deinit(self.server.options.allocator);
