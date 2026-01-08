@@ -17,6 +17,7 @@ pub const Connection = struct {
     const Self = @This();
     server: *Server,
     address: std.net.Address,
+    key: i64,
     mtu_size: u16,
     guid: i64,
     connected: bool,
@@ -39,6 +40,7 @@ pub const Connection = struct {
         return Self{
             .server = server,
             .address = address,
+            .key = Server.addressToKey(address),
             .mtu_size = mtu_size,
             .guid = guid,
             .connected = false,
@@ -588,12 +590,22 @@ pub const Connection = struct {
     }
 
     pub fn sendReliableMessage(self: *Connection, msg: []const u8, priority: Priority) void {
+        // Don't create frames for inactive connections - this prevents memory leaks
+        if (!self.active) return;
+
         var frame = frameIn(msg, self.server.options.allocator);
         frame.reliability = Reliability.ReliableOrdered;
         self.sendFrame(frame, priority);
     }
 
     pub fn sendFrame(self: *Connection, frame: Frame, priority: Priority) void {
+        // If connection is inactive, free the frame and return
+        if (!self.active) {
+            var f = frame;
+            f.deinit(self.server.options.allocator);
+            return;
+        }
+
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
         const channel_index = frame.order_channel orelse 0;
@@ -643,10 +655,14 @@ pub const Connection = struct {
         const split_id = self.comm_data.output_split_index;
         self.comm_data.output_split_index = (self.comm_data.output_split_index +% 1);
 
+        // Store original payload reference before we start fragmenting
+        const original_payload = frame.payload;
+        defer allocator.free(original_payload); // Free the original frame's payload after fragmenting
+
         var index: usize = 0;
-        while (index < frame.payload.len) {
-            const end_index = @min(index + max_size, frame.payload.len);
-            const fragment_payload = frame.payload[index..end_index];
+        while (index < original_payload.len) {
+            const end_index = @min(index + max_size, original_payload.len);
+            const fragment_payload = original_payload[index..end_index];
 
             // Create a copy of the fragment payload
             const payload_copy = allocator.dupe(u8, fragment_payload) catch {
