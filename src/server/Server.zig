@@ -20,7 +20,7 @@ pub const Server = struct {
     socket: Socket,
     running: bool = false,
     connections: std.AutoHashMap(i64, Connection),
-    connections_mutex: Mutex, // Add mutex for connections HashMap
+    connections_mutex: Mutex,
     tick_thread: ?Thread,
     connect_callback: ?ConnectCallback,
     connect_context: ?*anyopaque,

@@ -907,13 +907,13 @@ pub const CommData = struct {
         self.output_frame_queue.clearAndFree(allocator);
         self.output_frame_queue.deinit(allocator);
 
-        var outer_iterator = self.input_ordering_queue.iterator();
-        while (outer_iterator.next()) |outer_entry| {
-            var inner_iterator = outer_entry.value_ptr.iterator();
+        var outer_iterator = self.input_ordering_queue.valueIterator();
+        while (outer_iterator.next()) |inner_map| {
+            var inner_iterator = inner_map.iterator();
             while (inner_iterator.next()) |inner_entry| {
                 inner_entry.value_ptr.deinit(allocator);
             }
-            outer_entry.value_ptr.deinit();
+            inner_map.deinit();
         }
         self.input_ordering_queue.deinit();
 
