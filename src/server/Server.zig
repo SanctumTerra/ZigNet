@@ -356,6 +356,11 @@ pub const Server = struct {
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 
         self.running = false;
+
+        // Stop the socket first to prevent new connections
+        self.socket.stop();
+
+        // Now stop the tick thread
         if (self.tick_thread) |thread| {
             thread.join();
             self.tick_thread = null;
@@ -363,15 +368,17 @@ pub const Server = struct {
 
         // Lock before accessing connections for final cleanup
         self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
 
-        defer self.socket.deinit();
         var it = self.connections.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.deinit();
         }
 
         self.connections.deinit();
+        self.connections_mutex.unlock();
+
+        // Finish socket cleanup
+        self.socket.deinit();
 
         if (PERFORM_TIME_CHECKS) {
             const end_time = std.time.milliTimestamp();

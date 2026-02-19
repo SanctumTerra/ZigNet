@@ -540,8 +540,6 @@ pub const Socket = struct {
     pub fn deinit(self: *Self) void {
         self.stop();
 
-        self.buffer_pool.deinit();
-
         if (builtin.os.tag == .windows) {
             if (self.socket_handle != std.os.windows.ws2_32.INVALID_SOCKET) {
                 _ = std.os.windows.ws2_32.closesocket(self.socket_handle);
@@ -550,6 +548,8 @@ pub const Socket = struct {
         } else {
             _ = posix.close(self.socket_handle);
         }
+
+        self.buffer_pool.deinit();
     }
 
     pub fn setCallback(self: *Self, callback: CallbackFn, context: ?*anyopaque) void {
