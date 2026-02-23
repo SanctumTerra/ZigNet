@@ -395,11 +395,14 @@ pub const Connection = struct {
             while (outOfOrderQueue.?.contains(index)) : (index += 1) {
                 const iframe = outOfOrderQueue.?.get(index);
                 if (iframe == null) break;
-                if (iframe) |iiframe| { // compiler is a cry baby
+                if (iframe) |iiframe| {
                     self.handlePacket(iiframe.payload) catch |err| {
                         Logger.ERROR("Failed to handle packet: {any}", .{err});
+                        iiframe.deinit(self.server.options.allocator);
+                        _ = outOfOrderQueue.?.remove(index);
                         return;
                     };
+                    iiframe.deinit(self.server.options.allocator);
                 }
                 _ = outOfOrderQueue.?.remove(index);
             }
@@ -407,8 +410,17 @@ pub const Connection = struct {
         } else if (frame_index > self.comm_data.input_order_index[channel]) {
             const unordered = self.comm_data.input_ordering_queue.getPtr(channel);
             if (unordered) |map| {
-                map.put(frame_index, frame) catch |err| {
+                const allocator = self.server.options.allocator;
+                const payload_copy = allocator.dupe(u8, frame.payload) catch {
+                    Logger.ERROR("Failed to dupe payload for ordering queue", .{});
+                    return;
+                };
+                var frame_copy = frame;
+                frame_copy.payload = payload_copy;
+                frame_copy.allocator = allocator;
+                map.put(frame_index, frame_copy) catch |err| {
                     Logger.ERROR("Failed to put frame in ordering queue: {any}", .{err});
+                    allocator.free(payload_copy);
                     return;
                 };
             }

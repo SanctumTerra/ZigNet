@@ -13,19 +13,22 @@ pub const UDP_HEADER_SIZE = 28;
 pub const MAX_MTU_SIZE = 1492;
 pub const ConnectCallback = *const fn (connection: *Connection, context: ?*anyopaque) void;
 pub const DisconnectCallback = *const fn (connection: *Connection, context: ?*anyopaque) void;
+pub const TickCallback = *const fn (context: ?*anyopaque) void;
 
 pub const Server = struct {
     const Self = @This();
     options: ServerOptions,
     socket: Socket,
     running: bool = false,
-    connections: std.AutoHashMap(i64, Connection),
+    connections: std.AutoHashMap(i64, *Connection),
     connections_mutex: Mutex,
     tick_thread: ?Thread,
     connect_callback: ?ConnectCallback,
     connect_context: ?*anyopaque,
     disconnect_callback: ?DisconnectCallback,
     disconnect_context: ?*anyopaque,
+    tick_callback: ?TickCallback,
+    tick_context: ?*anyopaque,
 
     /// Fast hash for address -> i64 key (no allocation)
     /// IPv4: packs ip (4 bytes) + port (2 bytes) into lower 48 bits
@@ -63,13 +66,15 @@ pub const Server = struct {
                 options.address,
                 options.port,
             ),
-            .connections = std.AutoHashMap(i64, Connection).init(options.allocator),
+            .connections = std.AutoHashMap(i64, *Connection).init(options.allocator),
             .connections_mutex = Mutex{},
             .tick_thread = null,
             .connect_callback = options.connect_callback,
             .connect_context = options.connect_context,
             .disconnect_callback = options.disconnect_callback,
             .disconnect_context = options.disconnect_context,
+            .tick_callback = options.tick_callback,
+            .tick_context = options.tick_context,
         };
         return server;
     }
@@ -85,8 +90,9 @@ pub const Server = struct {
             {
                 var itter = self.connections.iterator();
                 while (itter.next()) |val| {
-                    if (val.value_ptr.active) {
-                        val.value_ptr.tick();
+                    const conn = val.value_ptr.*;
+                    if (conn.active) {
+                        conn.tick();
                     } else if (remove_count < to_remove.len) {
                         to_remove[remove_count] = val.key_ptr.*;
                         remove_count += 1;
@@ -95,14 +101,17 @@ pub const Server = struct {
             }
 
             for (to_remove[0..remove_count]) |key| {
-                if (self.connections.getPtr(key)) |connection| {
-                    connection.deinit();
-                    _ = self.connections.remove(key);
+                if (self.connections.fetchRemove(key)) |entry| {
+                    var conn = entry.value;
+                    conn.deinit();
+                    self.options.allocator.destroy(conn);
                     Logger.INFO("Disconnected connection with key: {d}", .{key});
                 }
             }
 
             self.connections_mutex.unlock();
+
+            if (self.tick_callback) |cb| cb(self.tick_context);
 
             if (PERFORM_TIME_CHECKS and false) {
                 const end_time = std.time.milliTimestamp();
@@ -210,13 +219,20 @@ pub const Server = struct {
                     Logger.INFO("Connection already exists", .{});
                 } else {
                     Logger.INFO("New connection", .{});
-                    const connection = Connection.init(self, from_addr, request.mtu_size, request.guid) catch |err| {
+                    const conn = self.options.allocator.create(Connection) catch |err| {
+                        Logger.ERROR("Failed to allocate connection: {s}", .{@errorName(err)});
+                        return;
+                    };
+                    conn.* = Connection.init(self, from_addr, request.mtu_size, request.guid) catch |err| {
                         Logger.ERROR("Failed to create connection: {s}", .{@errorName(err)});
+                        self.options.allocator.destroy(conn);
                         return;
                     };
 
-                    self.connections.put(key, connection) catch |err| {
+                    self.connections.put(key, conn) catch |err| {
                         Logger.ERROR("Failed to add connection to list: {s}", .{@errorName(err)});
+                        conn.deinit();
+                        self.options.allocator.destroy(conn);
                         return;
                     };
                 }
@@ -225,7 +241,7 @@ pub const Server = struct {
                 self.connections_mutex.lock();
                 defer self.connections_mutex.unlock();
 
-                if (self.connections.getPtr(key)) |conn| {
+                if (self.connections.get(key)) |conn| {
                     if (!conn.active) return;
                     conn.onFrameSet(data) catch |err| {
                         Logger.ERROR("Failed to handle frame set: {s}", .{@errorName(err)});
@@ -237,7 +253,7 @@ pub const Server = struct {
                 self.connections_mutex.lock();
                 defer self.connections_mutex.unlock();
 
-                if (self.connections.getPtr(key)) |conn| {
+                if (self.connections.get(key)) |conn| {
                     if (!conn.active) return;
                     conn.handleAck(data) catch |err| {
                         Logger.ERROR("Failed to handle frame set: {s}", .{@errorName(err)});
@@ -249,7 +265,7 @@ pub const Server = struct {
                 self.connections_mutex.lock();
                 defer self.connections_mutex.unlock();
 
-                if (self.connections.getPtr(key)) |conn| {
+                if (self.connections.get(key)) |conn| {
                     if (!conn.active) return;
                     conn.handleNack(data) catch |err| {
                         Logger.ERROR("Failed to handle frame set: {s}", .{@errorName(err)});
@@ -298,9 +314,10 @@ pub const Server = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        if (self.connections.getPtr(key)) |connection| {
-            connection.deinit();
-            _ = self.connections.remove(key);
+        if (self.connections.fetchRemove(key)) |entry| {
+            var conn = entry.value;
+            conn.deinit();
+            self.options.allocator.destroy(conn);
             Logger.DEBUG("Connection disconnected successfully: {d}", .{key});
         } else {
             Logger.WARN("Attempted to disconnect non-existent connection: {d}", .{key});
@@ -325,6 +342,11 @@ pub const Server = struct {
         self.disconnect_context = context;
     }
 
+    pub fn setTickCallback(self: *Self, callback: ?TickCallback, context: ?*anyopaque) void {
+        self.tick_callback = callback;
+        self.tick_context = context;
+    }
+
     /// Get a connection by address (thread-safe)
     pub fn getConnection(self: *Self, address: std.net.Address) ?*Connection {
         const key = addressToKey(address);
@@ -332,20 +354,20 @@ pub const Server = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        return self.connections.getPtr(key);
+        return self.connections.get(key);
     }
 
     /// Get all active connections (returns a copy for thread safety)
     pub fn getActiveConnections(self: *Self, allocator: std.mem.Allocator) !std.ArrayList(*Connection) {
-        var active_connections = std.ArrayList(*Connection).init(allocator);
+        var active_connections = std.ArrayList(*Connection).initBuffer(&[_]*Connection{});
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        var iterator = self.connections.iterator();
+        var iterator = self.connections.valueIterator();
         while (iterator.next()) |entry| {
-            if (entry.value_ptr.active) {
-                try active_connections.append(entry.value_ptr);
+            if (entry.*.active) {
+                try active_connections.append(allocator, entry.*);
             }
         }
 
@@ -369,9 +391,10 @@ pub const Server = struct {
         // Lock before accessing connections for final cleanup
         self.connections_mutex.lock();
 
-        var it = self.connections.iterator();
+        var it = self.connections.valueIterator();
         while (it.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.*.deinit();
+            self.options.allocator.destroy(entry.*);
         }
 
         self.connections.deinit();
@@ -409,6 +432,8 @@ pub const ServerOptions = struct {
     connect_context: ?*anyopaque = null,
     disconnect_callback: ?DisconnectCallback = null,
     disconnect_context: ?*anyopaque = null,
+    tick_callback: ?TickCallback = null,
+    tick_context: ?*anyopaque = null,
 };
 
 test "addressToKey IPv4 produces unique keys" {
