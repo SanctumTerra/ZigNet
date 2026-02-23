@@ -80,8 +80,10 @@ pub const Server = struct {
     }
 
     fn tickLoop(self: *Self) void {
+        const tick_interval_ns: u64 = std.time.ns_per_s / @as(u64, self.options.tick_rate);
         while (self.running) {
-            const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
+            const tick_start = std.time.nanoTimestamp();
+
             self.connections_mutex.lock();
 
             var to_remove: [64]i64 = undefined;
@@ -113,13 +115,10 @@ pub const Server = struct {
 
             if (self.tick_callback) |cb| cb(self.tick_context);
 
-            if (PERFORM_TIME_CHECKS and false) {
-                const end_time = std.time.milliTimestamp();
-                const elapsed = end_time - start_time;
-                Logger.DEBUG("PERF: tickLoop took {d} ms", .{elapsed});
+            const elapsed_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tick_start));
+            if (elapsed_ns < tick_interval_ns) {
+                std.Thread.sleep(tick_interval_ns - elapsed_ns);
             }
-
-            std.Thread.sleep(std.time.ns_per_s / @as(u64, self.options.tick_rate));
         }
     }
 
