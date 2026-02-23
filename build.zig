@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
     // exe.addModule("network", b.dependency("network", .{}).module("network"));
 
     if (target.result.os.tag == .windows) {
-        exe.linkSystemLibrary("ws2_32"); // For windows sockets.
+        exe.linkSystemLibrary("ws2_32");
         mod.linkSystemLibrary("ws2_32", .{});
     }
     b.installArtifact(exe);

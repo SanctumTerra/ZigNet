@@ -7,6 +7,9 @@ const Connection = @import("./Connection.zig").Connection;
 const Thread = std.Thread;
 const Mutex = Thread.Mutex;
 
+const builtin = @import("builtin");
+const is_windows = builtin.os.tag == .windows;
+
 const PERFORM_TIME_CHECKS = false;
 
 pub const UDP_HEADER_SIZE = 28;
@@ -81,6 +84,7 @@ pub const Server = struct {
 
     fn tickLoop(self: *Self) void {
         const tick_interval_ns: u64 = std.time.ns_per_s / @as(u64, self.options.tick_rate);
+
         while (self.running) {
             const tick_start = std.time.nanoTimestamp();
 
