@@ -221,7 +221,7 @@ pub const Server = struct {
                 if (self.connections.contains(key)) {
                     Logger.INFO("Connection already exists", .{});
                 } else {
-                    Logger.INFO("New connection", .{});
+                    // Logger.INFO("New connection", .{});
                     const conn = self.options.allocator.create(Connection) catch |err| {
                         Logger.ERROR("Failed to allocate connection: {s}", .{@errorName(err)});
                         return;
