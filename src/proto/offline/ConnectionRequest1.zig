@@ -63,7 +63,7 @@ pub const ConnectionRequest1 = struct {
 
 test "ConnectionRequest1" {
     const allocator = std.heap.page_allocator;
-    var connection_request1 = ConnectionRequest1.init(11, 1492, allocator);
+    var connection_request1 = ConnectionRequest1.init(11, 1400, allocator);
 
     const serialized = try connection_request1.serialize(allocator);
 
