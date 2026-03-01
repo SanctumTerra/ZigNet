@@ -30,6 +30,7 @@ pub const Connection = struct {
     tickCounter: u64 = 0,
     last_ping_time: i64 = 0,
     ping_interval: i64 = 5000,
+    send_mutex: std.Thread.Mutex = .{},
 
     pub fn init(server: *Server, address: std.net.Address, mtu_size: u16, guid: i64) !Self {
         var input_ordering_queue = std.AutoHashMap(u32, std.AutoHashMap(u32, Frame)).init(server.options.allocator);
@@ -103,10 +104,6 @@ pub const Connection = struct {
             Proto.Packets.DisconnectNotification => {
                 self.connected = false;
                 self.active = false;
-                // Trigger server disconnect callback
-                if (self.server.disconnect_callback) |callback| {
-                    callback(self, self.server.disconnect_context);
-                }
             },
             254 => {
                 // Game packet - trigger connection game packet callback
@@ -165,23 +162,22 @@ pub const Connection = struct {
         if (self.last_receive + 15000 < std.time.milliTimestamp()) {
             Logger.WARN("Connection {any} has not received any packets in 15000ms", .{self.address});
             self.active = false;
-            // Trigger server disconnect callback for timeout
-            if (self.server.disconnect_callback) |callback| {
-                callback(self, self.server.disconnect_context);
-            }
             return;
         }
 
         const allocator = self.server.options.allocator;
 
-        // Send queued frames - may need multiple framesets due to MTU limits
-        while (self.comm_data.output_frame_queue.items.len > 0) {
-            const queue_len = self.comm_data.output_frame_queue.items.len;
+        const MAX_FRAMES_PER_TICK: usize = 128;
+        var frames_sent_this_tick: usize = 0;
+        self.send_mutex.lock();
+        while (self.comm_data.output_frame_queue.items.len > 0 and frames_sent_this_tick < MAX_FRAMES_PER_TICK) {
             const before_len = self.comm_data.output_frame_queue.items.len;
-            self.sendQueue(queue_len);
-            // If sendQueue didn't remove any frames, break to avoid infinite loop
+            const batch = @min(MAX_FRAMES_PER_TICK - frames_sent_this_tick, before_len);
+            self.sendQueue(batch);
             if (self.comm_data.output_frame_queue.items.len >= before_len) break;
+            frames_sent_this_tick += before_len - self.comm_data.output_frame_queue.items.len;
         }
+        self.send_mutex.unlock();
         if (self.comm_data.received_sequences.count() > 0) {
             var sequences_list = std.ArrayList(u32).initBuffer(&[_]u32{});
             defer sequences_list.deinit(allocator);
@@ -611,12 +607,14 @@ pub const Connection = struct {
     }
 
     pub fn sendFrame(self: *Connection, frame: Frame, priority: Priority) void {
-        // If connection is inactive, free the frame and return
         if (!self.active) {
             var f = frame;
             f.deinit(self.server.options.allocator);
             return;
         }
+
+        self.send_mutex.lock();
+        defer self.send_mutex.unlock();
 
         const start_time = if (PERFORM_TIME_CHECKS) std.time.milliTimestamp() else 0;
 

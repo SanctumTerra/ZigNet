@@ -13,7 +13,7 @@ const is_windows = builtin.os.tag == .windows;
 const PERFORM_TIME_CHECKS = false;
 
 pub const UDP_HEADER_SIZE = 28;
-pub const MAX_MTU_SIZE = 1492;
+pub const MAX_MTU_SIZE = 1400;
 pub const ConnectCallback = *const fn (connection: *Connection, context: ?*anyopaque) void;
 pub const DisconnectCallback = *const fn (connection: *Connection, context: ?*anyopaque) void;
 pub const TickCallback = *const fn (context: ?*anyopaque) void;
@@ -109,6 +109,9 @@ pub const Server = struct {
             for (to_remove[0..remove_count]) |key| {
                 if (self.connections.fetchRemove(key)) |entry| {
                     var conn = entry.value;
+                    if (self.disconnect_callback) |callback| {
+                        callback(conn, self.disconnect_context);
+                    }
                     conn.deinit();
                     self.options.allocator.destroy(conn);
                     Logger.INFO("Disconnected connection with key: {d}", .{key});
@@ -181,7 +184,7 @@ pub const Server = struct {
                 var reply = Proto.ConnectionReply1.init(
                     self.options.advertisement.guid,
                     false,
-                    1492,
+                    self.options.max_mtu,
                     self.options.allocator,
                 );
                 defer reply.deinit();
@@ -198,12 +201,13 @@ pub const Server = struct {
                 };
                 defer request.deinit(allocator);
 
+                const mtu = @min(request.mtu_size, self.options.max_mtu);
                 const address = Proto.Address.init(4, "0.0.0.0", 0);
 
                 var reply = Proto.ConnectionReply2.init(
                     self.options.advertisement.guid,
                     address,
-                    request.mtu_size,
+                    mtu,
                     false,
                     self.options.allocator,
                 );
@@ -226,7 +230,7 @@ pub const Server = struct {
                         Logger.ERROR("Failed to allocate connection: {s}", .{@errorName(err)});
                         return;
                     };
-                    conn.* = Connection.init(self, from_addr, request.mtu_size, request.guid) catch |err| {
+                    conn.* = Connection.init(self, from_addr, mtu, request.guid) catch |err| {
                         Logger.ERROR("Failed to create connection: {s}", .{@errorName(err)});
                         self.options.allocator.destroy(conn);
                         return;
@@ -417,6 +421,7 @@ pub const Server = struct {
 pub const ServerOptions = struct {
     address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
+    max_mtu: u16 = 1400,
     allocator: std.mem.Allocator = std.heap.page_allocator,
     tick_rate: u16 = 20,
     advertisement: Proto.Advertisement = Proto.Advertisement.init(
