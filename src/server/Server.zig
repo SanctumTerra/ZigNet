@@ -123,7 +123,7 @@ pub const Server = struct {
                     }
                     conn.deinit();
                     self.options.allocator.destroy(conn);
-                    Logger.INFO("Disconnected connection with key: {d}", .{key});
+                    // Logger.INFO("Disconnected connection with key: {d}", .{key});
                 }
             }
 
