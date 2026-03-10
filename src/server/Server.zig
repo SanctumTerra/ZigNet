@@ -32,6 +32,9 @@ pub const Server = struct {
     disconnect_context: ?*anyopaque,
     tick_callback: ?TickCallback,
     tick_context: ?*anyopaque,
+    last_connection_tick_ns: u64,
+    last_callback_tick_ns: u64,
+    last_total_tick_ns: u64,
 
     /// Fast hash for address -> i64 key (no allocation)
     /// IPv4: packs ip (4 bytes) + port (2 bytes) into lower 48 bits
@@ -78,15 +81,21 @@ pub const Server = struct {
             .disconnect_context = options.disconnect_context,
             .tick_callback = options.tick_callback,
             .tick_context = options.tick_context,
+            .last_connection_tick_ns = 0,
+            .last_callback_tick_ns = 0,
+            .last_total_tick_ns = 0,
         };
         return server;
     }
 
     fn tickLoop(self: *Self) void {
         const tick_interval_ns: u64 = std.time.ns_per_s / @as(u64, self.options.tick_rate);
+        var next_tick_deadline = std.time.nanoTimestamp() + @as(i128, @intCast(tick_interval_ns));
 
         while (self.running) {
+            waitUntil(next_tick_deadline);
             const tick_start = std.time.nanoTimestamp();
+            next_tick_deadline = advanceTickDeadline(next_tick_deadline, tick_start, tick_interval_ns);
 
             self.connections_mutex.lock();
 
@@ -120,11 +129,47 @@ pub const Server = struct {
 
             self.connections_mutex.unlock();
 
+            const after_connections = std.time.nanoTimestamp();
+            self.last_connection_tick_ns = @intCast(@max(0, after_connections - tick_start));
+
             if (self.tick_callback) |cb| cb(self.tick_context);
 
             const elapsed_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tick_start));
-            if (elapsed_ns < tick_interval_ns) {
-                std.Thread.sleep(tick_interval_ns - elapsed_ns);
+            self.last_total_tick_ns = elapsed_ns;
+            self.last_callback_tick_ns = elapsed_ns -| self.last_connection_tick_ns;
+        }
+    }
+
+    fn advanceTickDeadline(current_deadline_ns: i128, tick_start_ns: i128, tick_interval_ns: u64) i128 {
+        const interval_ns: i128 = @intCast(tick_interval_ns);
+        var next_deadline_ns = current_deadline_ns + interval_ns;
+
+        while (next_deadline_ns <= tick_start_ns) {
+            next_deadline_ns += interval_ns;
+        }
+
+        return next_deadline_ns;
+    }
+
+    fn waitUntil(deadline_ns: i128) void {
+        const coarse_sleep_guard_ns: u64 = if (is_windows) 2_000_000 else 500_000;
+        const yield_guard_ns: u64 = if (is_windows) 200_000 else 100_000;
+
+        while (true) {
+            const now = std.time.nanoTimestamp();
+            const remaining = deadline_ns - now;
+            if (remaining <= 0) return;
+
+            const remaining_ns: u64 = @intCast(remaining);
+            if (remaining_ns > coarse_sleep_guard_ns) {
+                std.Thread.sleep(remaining_ns - coarse_sleep_guard_ns);
+                continue;
+            }
+
+            if (remaining_ns > yield_guard_ns) {
+                std.Thread.yield() catch {};
+            } else {
+                std.atomic.spinLoopHint();
             }
         }
     }
@@ -485,4 +530,26 @@ test "Server init and deinit" {
 
     try std.testing.expect(!server.running);
     try std.testing.expectEqual(@as(usize, 0), server.connections.count());
+}
+
+test "advanceTickDeadline keeps fixed cadence after a late wake" {
+    const tick_interval_ns: u64 = 50_000_000;
+    const previous_deadline_ns: i128 = 1_000_000_000;
+    const late_tick_start_ns: i128 = previous_deadline_ns + 12_000_000;
+
+    try std.testing.expectEqual(
+        previous_deadline_ns + tick_interval_ns,
+        Server.advanceTickDeadline(previous_deadline_ns, late_tick_start_ns, tick_interval_ns),
+    );
+}
+
+test "advanceTickDeadline skips missed intervals when badly behind" {
+    const tick_interval_ns: u64 = 50_000_000;
+    const previous_deadline_ns: i128 = 1_000_000_000;
+    const late_tick_start_ns: i128 = previous_deadline_ns + 125_000_000;
+
+    try std.testing.expectEqual(
+        previous_deadline_ns + 3 * @as(i128, @intCast(tick_interval_ns)),
+        Server.advanceTickDeadline(previous_deadline_ns, late_tick_start_ns, tick_interval_ns),
+    );
 }

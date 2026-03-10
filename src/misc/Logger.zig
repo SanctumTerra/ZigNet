@@ -99,6 +99,8 @@ pub const Logger = struct {
     }
 
     pub fn DEBUG(comptime fmt: []const u8, args: anytype) void {
+        if (current_debug_level == .None) return;
+
         const timestamp = std.time.timestamp();
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
 
