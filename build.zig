@@ -36,6 +36,25 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+    // Shared library for bun:ffi
+    const ffi_mod = b.createModule(.{
+        .root_source_file = b.path("src/ffi.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    ffi_mod.addImport("BinaryStream", binarystream_dep.module("BinaryStream"));
+    const ffi_lib = b.addLibrary(.{
+        .name = "zignet",
+        .linkage = .dynamic,
+        .root_module = ffi_mod,
+    });
+    if (target.result.os.tag == .windows) {
+        ffi_lib.linkSystemLibrary("ws2_32");
+    }
+    const ffi_step = b.step("ffi", "Build shared library for bun:ffi");
+    const ffi_install = b.addInstallArtifact(ffi_lib, .{});
+    ffi_step.dependOn(&ffi_install.step);
+
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
